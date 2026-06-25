@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling", "editables"]
+build-backend = "hatchling.build"
+
+[project]
+name = "webull-strategy-desk"
+version = "0.1.0"
+description = "Local strategy/EA management for Webull stocks and futures"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.5,<3",
+  "python-dotenv>=1.0,<2",
+  "PyYAML>=6.0,<7",
+  "uvicorn[standard]>=0.30,<1",
+]
+
+[project.optional-dependencies]
+webull = ["webull-openapi-python-sdk"]
+dev = [
+  "httpx>=0.27,<1",
+  "httpx2>=2,<3",
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<1",
+  "ruff>=0.7,<1",
+]
+
+[project.scripts]
+strategy-desk = "strategy_desk.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/strategy_desk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "strategies"]
+addopts = "-q"
+markers = [
+  "integration: opt-in external integration tests",
+  "uat: tests that can call Webull UAT when explicitly enabled",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
