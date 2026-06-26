@@ -709,9 +709,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         else:
             confirmed = request.live_confirmation == "ENABLE LIVE TRADING"
+            if config.mode == ExecutionMode.WEBULL_LIVE:
+                if not desk.settings.webull_live_enabled:
+                    raise HTTPException(
+                        409,
+                        "Set WEBULL_LIVE_ENABLED=true before starting live trading",
+                    )
+                if not confirmed:
+                    raise HTTPException(409, "Type ENABLE LIVE TRADING to confirm")
             adapter = WebullTradingAdapter(desk.settings, config.mode, live_confirmed=confirmed)
-            if config.mode == ExecutionMode.WEBULL_LIVE and not confirmed:
-                raise HTTPException(409, "Type ENABLE LIVE TRADING to confirm")
 
         await desk.supervisor.start(
             instance_id,

@@ -53,10 +53,20 @@ class Orders:
         return response
 
 
+class FailingOrders(Orders):
+    def place_order(self, account_id, orders):
+        raise RuntimeError("SDK failure leaked prod-secret")
+
+
 class Client:
     def __init__(self):
         self.order_v2 = Orders()
         self.order_v3 = Orders()
+
+
+class FailingClient:
+    def __init__(self):
+        self.order_v3 = FailingOrders()
 
 
 class CoreClient:
@@ -164,6 +174,20 @@ async def test_live_adapter_rejects_mutation_without_both_gates():
     adapter = WebullTradingAdapter(Settings(webull_live_enabled=True), ExecutionMode.WEBULL_LIVE)
     with pytest.raises(GatewayRejected, match="explicit UI confirmation"):
         await adapter.place(pending_ticket())
+
+
+@pytest.mark.asyncio
+async def test_sdk_exception_is_sanitized_and_translated():
+    adapter = WebullTradingAdapter(
+        Settings(webull_prod_app_secret="prod-secret"),
+        ExecutionMode.WEBULL_UAT,
+    )
+    adapter._client = FailingClient()
+    with pytest.raises(GatewayRejected) as error:
+        await adapter.place(pending_ticket())
+    assert error.value.code == "RuntimeError"
+    assert "prod-secret" not in str(error.value)
+    assert "<redacted>" in str(error.value)
 
 
 @pytest.mark.asyncio

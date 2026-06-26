@@ -86,19 +86,19 @@ class WebullTradingAdapter(BrokerAdapter):
         return self._client
 
     async def list_accounts(self) -> list[dict[str, Any]]:
-        response = await asyncio.to_thread(self._trade_client().account_v2.get_account_list)
+        response = await self._sdk_response(self._trade_client().account_v2.get_account_list)
         self._require_success(response)
         return response.json()
 
     async def account_balance(self, account_id: str) -> dict[str, Any]:
-        response = await asyncio.to_thread(
+        response = await self._sdk_response(
             self._trade_client().account_v2.get_account_balance, account_id
         )
         self._require_success(response)
         return response.json()
 
     async def account_positions(self, account_id: str) -> list[dict[str, Any]]:
-        response = await asyncio.to_thread(
+        response = await self._sdk_response(
             self._trade_client().account_v2.get_account_position, account_id
         )
         self._require_success(response)
@@ -122,13 +122,13 @@ class WebullTradingAdapter(BrokerAdapter):
         request.add_query_param("category", "US_FUTURES")
         request.add_query_param("code", code.strip().upper())
         request.add_query_param("status", status)
-        response = await asyncio.to_thread(self._api_client.get_response, request)
+        response = await self._sdk_response(self._api_client.get_response, request)
         self._require_success(response)
         return response.json()
 
     async def order_detail_event(self, ticket: OrderTicket) -> dict[str, object]:
         """Normalize the HTTP order-detail response into the gateway event shape."""
-        response = await asyncio.to_thread(
+        response = await self._sdk_response(
             self._order_api(ticket).get_order_detail,
             ticket.command.account_id,
             ticket.command.client_order_id,
@@ -177,7 +177,7 @@ class WebullTradingAdapter(BrokerAdapter):
             order["stop_price"] = str(command.stop_price)
         if command.asset_class == AssetClass.EQUITY:
             order["support_trading_session"] = "CORE"
-        response = await asyncio.to_thread(
+        response = await self._sdk_response(
             self._order_api(ticket).place_order, command.account_id, [order]
         )
         self._require_success(response)
@@ -198,7 +198,7 @@ class WebullTradingAdapter(BrokerAdapter):
         }
         if limit_price is not None:
             change["limit_price"] = str(limit_price)
-        response = await asyncio.to_thread(
+        response = await self._sdk_response(
             self._order_api(ticket).replace_order,
             ticket.command.account_id,
             [change],
@@ -209,7 +209,7 @@ class WebullTradingAdapter(BrokerAdapter):
 
     async def cancel(self, ticket: OrderTicket) -> OrderTicket:
         self._require_mutation_allowed()
-        response = await asyncio.to_thread(
+        response = await self._sdk_response(
             self._order_api(ticket).cancel_order,
             ticket.command.account_id,
             ticket.command.client_order_id,
@@ -222,6 +222,28 @@ class WebullTradingAdapter(BrokerAdapter):
     def _order_api(self, _ticket: OrderTicket):
         client = self._trade_client()
         return client.order_v3
+
+    async def _sdk_response(self, operation, *args):
+        try:
+            return await asyncio.to_thread(operation, *args)
+        except GatewayRejected:
+            raise
+        except Exception as exc:
+            raise GatewayRejected(
+                type(exc).__name__, self._safe_error_message(exc)
+            ) from exc
+
+    def _safe_error_message(self, exc: Exception) -> str:
+        message = str(exc) or type(exc).__name__
+        for value in (
+            self.settings.webull_uat_app_key,
+            self.settings.webull_uat_app_secret,
+            self.settings.webull_prod_app_key,
+            self.settings.webull_prod_app_secret,
+        ):
+            if value:
+                message = message.replace(value, "<redacted>")
+        return message[:500]
 
     def _require_mutation_allowed(self) -> None:
         if self.mode == ExecutionMode.WEBULL_LIVE and not (
