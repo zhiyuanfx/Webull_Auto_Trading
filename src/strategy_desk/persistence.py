@@ -11,6 +11,28 @@ from pathlib import Path
 
 from strategy_desk.domain import Fill, OrderStatus, OrderTicket
 
+PRUNABLE_TABLES: dict[str, tuple[str, ...]] = {
+    "strategy_instances": ("updated_at",),
+    "strategy_runs": ("COALESCE(ended_at, started_at)",),
+    "orders": ("updated_at",),
+    "fills": ("filled_at",),
+    "virtual_positions": ("updated_at",),
+    "virtual_lots": ("opened_at",),
+    "checkpoints": ("updated_at",),
+    "audit_events": ("created_at",),
+}
+ARCHIVE_TABLE_ORDER = tuple(PRUNABLE_TABLES)
+DELETE_TABLE_ORDER = (
+    "audit_events",
+    "checkpoints",
+    "virtual_lots",
+    "virtual_positions",
+    "fills",
+    "orders",
+    "strategy_runs",
+    "strategy_instances",
+)
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -172,6 +194,223 @@ class Ledger:
         columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _quote_identifier(name: str) -> str:
+        return '"' + name.replace('"', '""') + '"'
+
+    @staticmethod
+    def _file_size(path: Path) -> int | None:
+        return path.stat().st_size if path.exists() else None
+
+    @property
+    def wal_path(self) -> Path:
+        return Path(f"{self.path}-wal")
+
+    @property
+    def shm_path(self) -> Path:
+        return Path(f"{self.path}-shm")
+
+    def database_stats(self) -> dict[str, object]:
+        stats: dict[str, object] = {
+            "database": str(self.path),
+            "database_exists": self.path.exists(),
+            "file_size_bytes": self._file_size(self.path),
+            "wal_size_bytes": self._file_size(self.wal_path),
+            "shm_size_bytes": self._file_size(self.shm_path),
+            "tables": {},
+        }
+        if not self.path.exists():
+            return stats
+        with self.connect() as connection:
+            tables = [
+                row["name"]
+                for row in connection.execute(
+                    """SELECT name FROM sqlite_master
+                       WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                       ORDER BY name"""
+                )
+            ]
+            stats["tables"] = {
+                table: int(
+                    connection.execute(
+                        f"SELECT COUNT(*) AS count FROM {self._quote_identifier(table)}"
+                    ).fetchone()["count"]
+                )
+                for table in tables
+            }
+        stats["file_size_bytes"] = self._file_size(self.path)
+        stats["wal_size_bytes"] = self._file_size(self.wal_path)
+        stats["shm_size_bytes"] = self._file_size(self.shm_path)
+        return stats
+
+    def prune_database(
+        self,
+        cutoff: datetime,
+        *,
+        execute: bool = False,
+        archive_path: Path | None = None,
+    ) -> dict[str, object]:
+        cutoff = cutoff.astimezone(UTC)
+        result: dict[str, object] = {
+            "database": str(self.path),
+            "database_exists": self.path.exists(),
+            "cutoff": cutoff.isoformat(),
+            "dry_run": not execute,
+            "scope": "local_runtime_tables",
+            "tables": {
+                table: {"matched": 0, "archived": 0, "deleted": 0}
+                for table in PRUNABLE_TABLES
+            },
+            "archive": None,
+            "limitations": [
+                "Rows older than the cutoff are pruned from local runtime tables.",
+                "Simulator account configuration is preserved.",
+            ],
+        }
+        if archive_path is not None:
+            result["archive"] = {
+                "path": str(archive_path),
+                "created": False,
+                "rows_archived": 0,
+            }
+        if not self.path.exists():
+            return result
+
+        cutoff_text = cutoff.isoformat()
+        with self._lock, self.connect() as connection:
+            rows_by_table = {
+                table: self._prunable_rows(connection, table, cutoff_text)
+                for table in ARCHIVE_TABLE_ORDER
+            }
+            total_matched = sum(len(rows) for rows in rows_by_table.values())
+            for table, rows in rows_by_table.items():
+                result["tables"][table]["matched"] = len(rows)
+            if not execute or total_matched == 0:
+                return result
+            if archive_path is not None:
+                self._archive_rows(archive_path, rows_by_table)
+                result["archive"] = {
+                    "path": str(archive_path),
+                    "created": True,
+                    "rows_archived": total_matched,
+                }
+                for table, rows in rows_by_table.items():
+                    result["tables"][table]["archived"] = len(rows)
+            for table in DELETE_TABLE_ORDER:
+                result["tables"][table]["deleted"] = self._delete_rows(
+                    connection,
+                    table,
+                    rows_by_table[table],
+                )
+        return result
+
+    def _prunable_rows(
+        self,
+        connection: sqlite3.Connection,
+        table: str,
+        cutoff_text: str,
+    ) -> list[sqlite3.Row]:
+        timestamp_expr = PRUNABLE_TABLES[table][0]
+        return connection.execute(
+            f"""SELECT * FROM {self._quote_identifier(table)}
+                WHERE {timestamp_expr} < ?
+                ORDER BY rowid""",
+            (cutoff_text,),
+        ).fetchall()
+
+    def _delete_rows(
+        self,
+        connection: sqlite3.Connection,
+        table: str,
+        rows: list[sqlite3.Row],
+    ) -> int:
+        if not rows:
+            return 0
+        if table in {"audit_events", "virtual_lots"}:
+            return connection.executemany(
+                f"DELETE FROM {self._quote_identifier(table)} WHERE id=?",
+                [(row["id"],) for row in rows],
+            ).rowcount
+        if table == "checkpoints":
+            return connection.executemany(
+                """DELETE FROM checkpoints
+                   WHERE strategy_instance_id=? AND key=?""",
+                [(row["strategy_instance_id"], row["key"]) for row in rows],
+            ).rowcount
+        if table == "virtual_positions":
+            return connection.executemany(
+                """DELETE FROM virtual_positions
+                   WHERE strategy_instance_id=? AND symbol=?""",
+                [(row["strategy_instance_id"], row["symbol"]) for row in rows],
+            ).rowcount
+        primary_keys = {
+            "strategy_instances": "id",
+            "strategy_runs": "id",
+            "orders": "ticket_id",
+            "fills": "id",
+        }
+        key = primary_keys[table]
+        return connection.executemany(
+            f"DELETE FROM {self._quote_identifier(table)} WHERE {self._quote_identifier(key)}=?",
+            [(row[key],) for row in rows],
+        ).rowcount
+
+    def _archive_rows(
+        self,
+        archive_path: Path,
+        rows_by_table: dict[str, list[sqlite3.Row]],
+    ) -> None:
+        archive_path = archive_path.expanduser()
+        if archive_path.resolve() == self.path.resolve():
+            raise ValueError("Archive path must be different from the active database")
+        if archive_path.exists():
+            raise FileExistsError(f"Refusing to overwrite archive {archive_path}")
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        archive = sqlite3.connect(archive_path)
+        try:
+            archive.executescript(SCHEMA)
+            archive.execute("PRAGMA foreign_keys=OFF")
+            for table in ARCHIVE_TABLE_ORDER:
+                rows = rows_by_table[table]
+                if rows:
+                    columns = rows[0].keys()
+                    column_sql = ", ".join(self._quote_identifier(column) for column in columns)
+                    placeholders = ", ".join("?" for _ in columns)
+                    archive.executemany(
+                        f"""INSERT INTO {self._quote_identifier(table)}({column_sql})
+                            VALUES ({placeholders})""",
+                        [tuple(row[column] for column in columns) for row in rows],
+                    )
+            archive.commit()
+            archive.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            archive.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            archive.close()
+
+    def vacuum(self) -> dict[str, object]:
+        if not self.path.exists():
+            return {
+                "database": str(self.path),
+                "database_exists": False,
+                "vacuumed": False,
+                "wal_checkpoint": None,
+                "stats": self.database_stats(),
+            }
+        with self._lock, self.connect() as connection:
+            checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            connection.execute("VACUUM")
+        return {
+            "database": str(self.path),
+            "database_exists": True,
+            "vacuumed": True,
+            "wal_checkpoint": {
+                "busy": int(checkpoint[0]),
+                "log_frames": int(checkpoint[1]),
+                "checkpointed_frames": int(checkpoint[2]),
+            },
+            "stats": self.database_stats(),
+        }
 
     def save_instance(self, instance: dict[str, object]) -> None:
         now = datetime.now(UTC).isoformat()

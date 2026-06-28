@@ -39,6 +39,53 @@ workers never receive those variables. Webull market data may require a separate
 quotes entitlement even when the desktop application already has quote access.
 Reusable SDK tokens are cached in the ignored `.runtime/webull_tokens` directory.
 
+## Local database maintenance
+
+`strategy-desk init-db` creates or migrates the local SQLite database. It is idempotent and
+does not wipe, prune, or reset existing data. By default, local runtime state persists in
+`data/strategy_desk.db`, including strategy instances, runs, orders, fills, virtual
+positions, FIFO lots, checkpoints, simulator accounts, and audit events.
+
+Inspect the configured database without exposing payload details:
+
+```bash
+strategy-desk db-stats
+```
+
+The command prints JSON with the database path, whether the file exists, database/WAL/SHM
+file sizes when present, and table row counts.
+
+Prune old local runtime rows with an explicit retention window. Dry-run is the default:
+
+```bash
+strategy-desk db-prune --older-than 90d --dry-run
+strategy-desk db-prune --older-than 90d --execute
+```
+
+Rows older than the cutoff are eligible in `strategy_instances`, `strategy_runs`, `orders`,
+`fills`, `virtual_positions`, `virtual_lots`, `checkpoints`, and `audit_events`.
+`simulator_accounts` are preserved because they are local account configuration. This is a
+local reset/archive workflow: once rows are pruned, Strategy Desk relies on the archive and
+broker-level Webull history for review rather than local strategy-state restoration.
+Use a conservative retention policy, such as keeping at least 90 days of local runtime data.
+
+Archive eligible rows before deleting them:
+
+```bash
+strategy-desk db-prune --older-than 90d \
+  --archive data/archives/strategy_desk_YYYYMMDD.sqlite3 \
+  --execute
+```
+
+Archive databases are local runtime artifacts under `data/archives/`, which is gitignored;
+they should not be committed. After a prune, run compaction explicitly when desired:
+
+```bash
+strategy-desk db-vacuum
+```
+
+`db-vacuum` runs a WAL checkpoint/truncate and SQLite `VACUUM`; it is never automatic.
+
 Conda owns the interpreter and installed packages. The editable installation does not copy
 the repository into Conda; it registers a pointer to this checkout and provides the
 `strategy-desk` command. `pyproject.toml` remains the source of dependency declarations and
