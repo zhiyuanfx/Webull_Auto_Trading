@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     bridge_db_path: Path = Field(
         default=Path("data/webull_bridge.db"),
-        validation_alias=AliasChoices("WEBULL_BRIDGE_DB_PATH", "STRATEGY_DESK_DB_PATH"),
+        validation_alias="WEBULL_BRIDGE_DB_PATH",
     )
     bridge_host: str = Field(
         default="127.0.0.1",
