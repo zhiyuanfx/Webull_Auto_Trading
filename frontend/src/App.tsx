@@ -1,6 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { translator } from "./i18n";
-import { Health, Language, Page, Plugin, Position, SimAccount, StrategyDetail, StrategyInstance, Theme } from "./types";
+import { ActivityRow, EventRow, Health, OrderRow, Page, PositionsResponse, Route, Theme } from "./types";
 
 const API = "/api";
 
@@ -16,137 +15,226 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json();
 }
 
+const pageLabels: Record<Page, string> = {
+  dashboard: "Dashboard",
+  route: "Webhook Route",
+  orders: "Orders",
+  positions: "Positions",
+  activity: "Activity",
+  settings: "Settings"
+};
+
 function App() {
-  const [language, setLanguage] = useState<Language>(() => (localStorage.getItem("language") as Language) || "en");
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("theme") as Theme) || "light");
   const [page, setPage] = useState<Page>("dashboard");
-  const [instances, setInstances] = useState<StrategyInstance[]>([]);
-  const [plugins, setPlugins] = useState<Plugin[]>([]);
-  const [accounts, setAccounts] = useState<SimAccount[]>([]);
-  const [positions, setPositions] = useState<Position[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
+  const [routes, setRoutes] = useState<Route[]>([]);
+  const [events, setEvents] = useState<EventRow[]>([]);
+  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [activity, setActivity] = useState<ActivityRow[]>([]);
+  const [positions, setPositions] = useState<PositionsResponse>({ account_id: "", positions: [] });
   const [error, setError] = useState("");
-  const t = useMemo(() => translator(language), [language]);
 
   const reload = useCallback(async () => {
     try {
-      const [nextInstances, nextPlugins, nextAccounts, nextPositions, nextHealth] = await Promise.all([
-        request<StrategyInstance[]>("/instances"), request<Plugin[]>("/plugins"),
-        request<SimAccount[]>("/simulator/accounts"), request<Position[]>("/positions"), request<Health>("/health")
+      const [nextHealth, nextRoutes, nextEvents, nextOrders, nextActivity] = await Promise.all([
+        request<Health>("/health"),
+        request<Route[]>("/routes"),
+        request<EventRow[]>("/events"),
+        request<OrderRow[]>("/orders"),
+        request<ActivityRow[]>("/activity")
       ]);
-      setInstances(nextInstances); setPlugins(nextPlugins); setAccounts(nextAccounts);
-      setPositions(nextPositions); setHealth(nextHealth); setError("");
-    } catch (reason) { setError(String(reason)); }
+      setHealth(nextHealth);
+      setRoutes(nextRoutes);
+      setEvents(nextEvents);
+      setOrders(nextOrders);
+      setActivity(nextActivity);
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    }
   }, []);
 
-  useEffect(() => { reload(); const id = window.setInterval(reload, 3000); return () => clearInterval(id); }, [reload]);
-  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("theme", theme); }, [theme]);
-  useEffect(() => { localStorage.setItem("language", language); document.documentElement.lang = language === "zh" ? "zh-CN" : "en"; }, [language]);
+  const refreshPositions = useCallback(async () => {
+    try {
+      const nextPositions = await request<PositionsResponse>("/positions");
+      setPositions(nextPositions);
+      setError("");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }, []);
 
-  const running = instances.filter(item => item.worker?.alive).length;
-  const pnl = positions.reduce((sum, item) => sum + Number(item.realized_pnl), 0);
-  const activeModes = [...new Set(instances.filter(item => item.worker?.alive).map(item => item.mode))];
+  useEffect(() => {
+    reload();
+    refreshPositions();
+    const id = window.setInterval(reload, 3000);
+    return () => window.clearInterval(id);
+  }, [reload, refreshPositions]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  const activeRoute = routes[0];
+  const failures = events.filter(item => ["failed", "rejected", "validation_failed", "unknown"].includes(item.status));
+  const queued = events.filter(item => item.status === "queued").length;
+  const submitted = orders.filter(item => item.status === "submitted").length;
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brand-mark">SD</div><div><strong>Strategy Desk</strong><span>{t("automation")}</span></div></div>
-      <nav>{(["dashboard", "strategies", "accounts", "system"] as Page[]).map(item =>
+      <div className="brand"><div className="brand-mark">WB</div><div><strong>Webull Bridge</strong><span>TradingView intake</span></div></div>
+      <nav>{(Object.keys(pageLabels) as Page[]).map(item =>
         <button className={page === item ? "active" : ""} onClick={() => setPage(item)} key={item}>
-          <span className="nav-dot" />{t(item)}
+          <span className="nav-dot" />{pageLabels[item]}
         </button>)}</nav>
-      <div className="sidebar-foot"><span className="status-dot" /> API {health?.status || "—"}</div>
+      <div className="sidebar-foot"><span className="status-dot" /> API {health?.status || "..."}</div>
     </aside>
     <main>
       <header>
-        <div><h1>{t(page)}</h1><p>{t("subtitle")}</p></div>
+        <div><h1>{pageLabels[page]}</h1><p>Local live bridge for TradingView webhook instructions</p></div>
         <div className="header-actions">
-          <span className="mode-badge">{activeModes.length ? activeModes.join(" + ") : t("idle")}</span>
-          <div className="segmented"><button className={language === "en" ? "selected" : ""} onClick={() => setLanguage("en")}>EN</button><button className={language === "zh" ? "selected" : ""} onClick={() => setLanguage("zh")}>简中</button></div>
+          <span className={`mode-badge ${health?.execution_enabled ? "live" : ""}`}>{health?.execution_enabled ? "EXECUTION ON" : "PAUSED"}</span>
           <button className="icon-button" onClick={() => setTheme(theme === "light" ? "dark" : "light")} aria-label="theme">{theme === "light" ? "◐" : "○"}</button>
         </div>
       </header>
       {error && <div className="error-banner">{error}</div>}
-      {page === "dashboard" && <Dashboard t={t} running={running} pnl={pnl} positions={positions} instances={instances} health={health} onAction={reload} />}
-      {page === "strategies" && <Strategies t={t} plugins={plugins} accounts={accounts} positions={positions} instances={instances} reload={reload} />}
-      {page === "accounts" && <Accounts t={t} accounts={accounts} reload={reload} />}
-      {page === "system" && <SystemPage t={t} health={health} plugins={plugins} />}
+      {page === "dashboard" && <Dashboard health={health} routes={routes} queued={queued} submitted={submitted} failures={failures.length} onReload={reload} />}
+      {page === "route" && <RoutePage route={activeRoute} onReload={reload} />}
+      {page === "orders" && <OrdersPage events={events} orders={orders} onReload={reload} />}
+      {page === "positions" && <PositionsPage routes={routes} positions={positions} refresh={refreshPositions} />}
+      {page === "activity" && <ActivityPage rows={activity} />}
+      {page === "settings" && <SettingsPage health={health} onReload={reload} />}
     </main>
   </div>;
 }
 
-type T = ReturnType<typeof translator>;
-
-function Dashboard({ t, running, pnl, positions, instances, health, onAction }: { t: T; running: number; pnl: number; positions: Position[]; instances: StrategyInstance[]; health: Health | null; onAction: () => void }) {
-  async function emergency() { if (window.prompt("Type EMERGENCY STOP") !== "EMERGENCY STOP") return; await request("/emergency-stop?confirmation=EMERGENCY%20STOP", { method: "POST" }); onAction(); }
+function Dashboard({ health, routes, queued, submitted, failures, onReload }: { health: Health | null; routes: Route[]; queued: number; submitted: number; failures: number; onReload: () => void }) {
+  async function toggleExecution() {
+    await request("/settings/execution", { method: "PUT", body: JSON.stringify({ enabled: !health?.execution_enabled }) });
+    onReload();
+  }
+  async function emergencyPause() {
+    if (window.prompt("Type PAUSE ALL") !== "PAUSE ALL") return;
+    await request("/emergency/pause", { method: "POST", body: JSON.stringify({ confirmation: "PAUSE ALL" }) });
+    onReload();
+  }
   return <>
     <section className="metrics">
-      <Metric label={t("running")} value={String(running)} note={`${instances.length} ${t("total")}`} />
-      <Metric label={t("positions")} value={String(positions.length)} note={t("virtualLedgers")} />
-      <Metric label={t("dayPnl")} value={`${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}`} positive={pnl >= 0} note={t("allStrategies")} />
-      <Metric label={t("feed")} value={health?.feed_age_ms == null ? "— ms" : `${health.feed_age_ms} ms`} note={health?.market_connections.length ? `${health.market_connections.length} ${t("connections").toLowerCase()}` : t("awaitingMarket")} />
+      <Metric label="Execution" value={health?.execution_enabled ? "On" : "Paused"} note="Global safety switch" positive={health?.execution_enabled} />
+      <Metric label="Routes" value={String(routes.length)} note={`${routes.filter(item => item.enabled).length} enabled`} />
+      <Metric label="Queued" value={String(queued)} note="Waiting for execution" />
+      <Metric label="Failures" value={String(failures)} note="Needs review" positive={failures === 0} />
     </section>
-    <section className="panel"><div className="panel-title"><div><h2>{t("strategies")}</h2><p>{t("overview")}</p></div><div className="button-row"><button className="danger" onClick={emergency}>{t("emergency")}</button><button className="secondary" onClick={onAction}>{t("refresh")}</button></div></div>
-      <StrategyTable t={t} instances={instances} positions={positions} reload={onAction} />
+    <section className="panel"><div className="panel-title"><div><h2>Bridge Status</h2><p>Fast intake, durable local history, live Webull execution</p></div><div className="button-row"><button className={health?.execution_enabled ? "secondary" : "primary"} onClick={toggleExecution}>{health?.execution_enabled ? "Pause execution" : "Enable execution"}</button><button className="danger" onClick={emergencyPause}>Emergency pause</button></div></div>
+      <div className="status-grid">
+        <Status label="Webull credentials" value={health?.webull_configured ? "Configured" : "Missing"} ok={!!health?.webull_configured} />
+        <Status label="Database" value={health?.database || "..."} ok />
+        <Status label="Latest submitted orders" value={String(submitted)} ok />
+        <Status label="Token cache" value={health?.token_dir || "..."} ok />
+      </div>
     </section>
   </>;
+}
+
+function RoutePage({ route, onReload }: { route?: Route; onReload: () => void }) {
+  const sample = useMemo(() => JSON.stringify({
+    secret: "route-shared-secret",
+    event_id: "strategy-{{timenow}}-{{bar_index}}",
+    action: "BUY",
+    symbol: "1OZ",
+    quantity: "1",
+    order_type: "MARKET",
+    strategy: "Pine strategy name",
+    alert: "long-entry",
+    timeframe: "{{interval}}"
+  }, null, 2), []);
+  if (!route) return <section className="panel"><div className="empty">No route has been initialized.</div></section>;
+  const activeRoute = route;
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const secret = String(data.get("secret") || "");
+    await request(`/routes/${activeRoute.route_id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name: data.get("name"),
+        account_id: data.get("account_id"),
+        enabled: data.get("enabled") === "on",
+        secret: secret || undefined,
+        allowed_symbols: String(data.get("allowed_symbols") || "").split(",").map(item => item.trim()).filter(Boolean),
+        max_quantity: data.get("max_quantity"),
+        max_notional: data.get("max_notional"),
+        accepted_order_types: String(data.get("accepted_order_types") || "").split(",").map(item => item.trim()).filter(Boolean)
+      })
+    });
+    onReload();
+  }
+  return <div className="two-column"><section className="panel form-panel"><h2>Route Settings</h2><form onSubmit={submit}>
+    <label>Route ID<input value={route.route_id} disabled /></label>
+    <label>Name<input name="name" defaultValue={route.name} required /></label>
+    <label>Webull account ID<input name="account_id" defaultValue={route.account_id} required /></label>
+    <label>Rotate shared secret<input name="secret" placeholder={route.secret_configured ? "Leave blank to keep current secret" : "Required before use"} /></label>
+    <label>Allowed symbols<input name="allowed_symbols" defaultValue={route.allowed_symbols.join(", ")} placeholder="1OZ, AAPL" /></label>
+    <div className="form-row"><label>Max quantity<input name="max_quantity" defaultValue={route.max_quantity} /></label><label>Max notional<input name="max_notional" defaultValue={route.max_notional} /></label></div>
+    <label>Accepted order types<input name="accepted_order_types" defaultValue={route.accepted_order_types.join(", ")} /></label>
+    <label className="check"><input name="enabled" type="checkbox" defaultChecked={route.enabled} />Route enabled</label>
+    <button className="primary">Save route</button>
+  </form></section>
+  <section className="panel"><div className="panel-title"><div><h2>Webhook</h2><p>POST /webhook/tradingview/{route.route_id}</p></div></div><pre>{sample}</pre></section></div>;
+}
+
+function OrdersPage({ events, orders, onReload }: { events: EventRow[]; orders: OrderRow[]; onReload: () => void }) {
+  const [selected, setSelected] = useState<EventRow | null>(null);
+  async function retry(item: EventRow) {
+    await request(`/events/${item.id}/retry`, { method: "POST" });
+    onReload();
+  }
+  return <><section className="panel"><div className="panel-title"><div><h2>Webhook Events</h2><p>{events.length} recent events</p></div><button className="secondary" onClick={onReload}>Refresh</button></div>
+    <div className="table-wrap"><table><thead><tr><th>Event</th><th>Action</th><th>Symbol</th><th>Status</th><th>Updated</th><th>Actions</th></tr></thead><tbody>
+      {events.map(item => <tr key={item.id}><td><strong>{item.event_id}</strong><small>{item.route_id}</small></td><td>{item.action}</td><td>{item.symbol || "-"}</td><td><span className={`tag ${item.status}`}>{item.status}</span></td><td>{new Date(item.updated_at).toLocaleString()}</td><td><div className="button-row"><button className="secondary" onClick={() => setSelected(item)}>Details</button>{["failed", "unknown"].includes(item.status) && <button className="secondary" onClick={() => retry(item)}>Retry</button>}</div></td></tr>)}
+    </tbody></table></div></section>
+    <section className="panel"><div className="panel-title"><div><h2>Orders</h2><p>{orders.length} recent order records</p></div></div><div className="table-wrap"><table><thead><tr><th>Client ID</th><th>Side</th><th>Symbol</th><th>Status</th><th>Webull ID</th></tr></thead><tbody>{orders.map(item => <tr key={item.id}><td><strong>{item.client_order_id || item.target_client_order_id || "-"}</strong><small>{item.account_id}</small></td><td>{item.side || item.action}</td><td>{item.symbol || "-"}</td><td><span className={`tag ${item.status}`}>{item.status}</span></td><td>{item.webull_order_id || "-"}</td></tr>)}</tbody></table></div></section>
+    {selected && <section className="panel detail-panel"><div className="panel-title"><div><h2>{selected.event_id}</h2><p>{selected.status}</p></div><button className="secondary" onClick={() => setSelected(null)}>Close</button></div><pre>{JSON.stringify(selected, null, 2)}</pre></section>}</>;
+}
+
+function PositionsPage({ routes, positions, refresh }: { routes: Route[]; positions: PositionsResponse; refresh: () => void }) {
+  const route = routes[0];
+  async function flatten(symbol: string) {
+    const confirmation = `FLATTEN ${symbol}`;
+    if (window.prompt(`Type ${confirmation}`) !== confirmation) return;
+    const quantity = window.prompt("Quantity to flatten", "1") || "1";
+    await request(`/routes/${route.route_id}/flatten/${symbol}?quantity=${encodeURIComponent(quantity)}`, { method: "POST", body: JSON.stringify({ confirmation }) });
+    refresh();
+  }
+  return <section className="panel"><div className="panel-title"><div><h2>Webull Positions</h2><p>{positions.account_id || "No account selected"}{positions.stale ? " - stale snapshot" : ""}</p></div><button className="secondary" onClick={refresh}>Refresh</button></div>
+    {positions.error && <div className="error-banner">{positions.error}</div>}
+    <div className="table-wrap"><table><thead><tr><th>Symbol</th><th>Quantity</th><th>Cost</th><th>Last</th><th>P/L</th><th>Actions</th></tr></thead><tbody>{positions.positions.map((item, index) => { const symbol = String(item.symbol || ""); return <tr key={index}><td><strong>{symbol || "-"}</strong><small>{String(item.instrument_type || "")}</small></td><td>{String(item.quantity || "-")}</td><td>{String(item.cost_price || "-")}</td><td>{String(item.last_price || "-")}</td><td>{String(item.unrealized_profit_loss || "-")}</td><td>{route && symbol && <button className="danger" onClick={() => flatten(symbol)}>Flatten</button>}</td></tr>; })}</tbody></table></div>
+  </section>;
+}
+
+function ActivityPage({ rows }: { rows: ActivityRow[] }) {
+  return <section className="panel"><div className="panel-title"><div><h2>Activity</h2><p>Sanitized local audit trail</p></div></div><div className="activity-list">{rows.map(item => <article key={item.id}><span className={`tag ${item.level}`}>{item.kind}</span><div><strong>{item.message}</strong><small>{new Date(item.created_at).toLocaleString()}</small></div></article>)}</div></section>;
+}
+
+function SettingsPage({ health, onReload }: { health: Health | null; onReload: () => void }) {
+  async function cancelKnown() {
+    const confirmation = "CANCEL KNOWN OPEN ORDERS";
+    if (window.prompt(`Type ${confirmation}`) !== confirmation) return;
+    await request("/emergency/cancel-known", { method: "POST", body: JSON.stringify({ confirmation }) });
+    onReload();
+  }
+  return <><section className="metrics"><Metric label="API" value={health?.status || "..."} note="127.0.0.1" /><Metric label="Webull" value={health?.webull_configured ? "Ready" : "Missing"} note="Production SDK" /><Metric label="Execution" value={health?.execution_enabled ? "On" : "Paused"} note="Global switch" /><Metric label="Routes" value={String(health?.routes.length || 0)} note="Webhook configs" /></section>
+  <section className="panel system-grid"><div><h2>Runtime</h2><Status label="Database" value={health?.database || "..."} ok /><Status label="Token cache" value={health?.token_dir || "..."} ok /><Status label="HTTPS tunnel" value="User managed" ok /></div><div><h2>Emergency</h2><p className="muted">Cancel known open orders uses locally recorded client order ids. Review Webull directly if network or token errors occur.</p><button className="danger" onClick={cancelKnown}>Cancel known open orders</button></div></section></>;
 }
 
 function Metric({ label, value, note, positive }: { label: string; value: string; note: string; positive?: boolean }) {
   return <article className="metric"><span>{label}</span><strong className={positive ? "gain" : ""}>{value}</strong><small>{note}</small><div className="spark"><i /><i /><i /><i /><i /><i /></div></article>;
 }
 
-function StrategyTable({ t, instances, positions, reload, onInspect }: { t: T; instances: StrategyInstance[]; positions: Position[]; reload: () => void; onInspect?: (item: StrategyInstance) => void }) {
-  async function toggle(item: StrategyInstance) {
-    const action = item.worker?.alive ? "stop" : "start";
-    let live_confirmation: string | undefined;
-    if (action === "start" && item.mode === "WEBULL_LIVE") live_confirmation = window.prompt("Type ENABLE LIVE TRADING") || undefined;
-    await request(`/instances/${item.id}/${action}`, { method: "POST", body: JSON.stringify({ live_confirmation }) });
-    reload();
-  }
-  async function action(item: StrategyInstance, name: "pause" | "resume" | "flatten") { if (name === "flatten" && !window.confirm(`Flatten ${item.config.name}?`)) return; await request(`/instances/${item.id}/${name}`, { method: "POST" }); reload(); }
-  if (!instances.length) return <div className="empty">{t("noStrategies")}</div>;
-  return <div className="table-wrap"><table><thead><tr><th>{t("strategy")}</th><th>{t("mode")}</th><th>{t("symbols")}</th><th>{t("position")}</th><th>{t("pnl")}</th><th>{t("health")}</th><th>{t("actions")}</th></tr></thead><tbody>
-    {instances.map(item => { const own = positions.filter(position => position.strategy_instance_id === item.id); const qty = own.map(p => `${p.symbol} ${p.quantity}`).join(", ") || "Flat"; const ownPnl = own.reduce((sum, p) => sum + Number(p.realized_pnl), 0); return <tr key={item.id}>
-      <td><strong>{item.config.name}</strong><small>{item.plugin_id} · {item.plugin_version}</small></td><td><span className={`tag ${item.mode.toLowerCase()}`}>{item.mode}</span></td><td>{item.config.symbols.join(", ")}</td><td>{qty}</td><td className={ownPnl >= 0 ? "gain" : "loss"}>{ownPnl >= 0 ? "+" : ""}${ownPnl.toFixed(2)}</td><td><span className={item.worker?.alive ? "health-ok" : "health-idle"}><i />{item.worker?.alive ? item.state : "STOPPED"}</span></td><td><div className="button-row">{onInspect && <button className="secondary" onClick={() => onInspect(item)}>{t("details")}</button>}<button className={item.worker?.alive ? "secondary" : "primary"} onClick={() => toggle(item)}>{item.worker?.alive ? t("stop") : t("start")}</button>{item.worker?.alive && <button className="secondary" onClick={() => action(item, item.state === "PAUSED" ? "resume" : "pause")}>{item.state === "PAUSED" ? t("resume") : t("pause")}</button>}{own.length > 0 && <button className="danger" onClick={() => action(item, "flatten")}>{t("flatten")}</button>}</div></td>
-    </tr>; })}
-  </tbody></table></div>;
+function Status({ label, value, ok }: { label: string; value: string; ok: boolean }) {
+  return <div className="status-row"><span><i className={ok ? "ok" : "idle"} />{label}</span><strong>{value}</strong></div>;
 }
-
-function Strategies({ t, plugins, accounts, positions, instances, reload }: { t: T; plugins: Plugin[]; accounts: SimAccount[]; positions: Position[]; instances: StrategyInstance[]; reload: () => void }) {
-  const [plugin, setPlugin] = useState(plugins[0]?.id || "");
-  const [mode, setMode] = useState("LOCAL_SIM");
-  const [feed, setFeed] = useState("REPLAY");
-  const [productCode, setProductCode] = useState("");
-  const [contracts, setContracts] = useState<Array<{ symbol: string; name?: string; contract_month: string }>>([]);
-  const [contractError, setContractError] = useState("");
-  const [detail, setDetail] = useState<StrategyDetail | null>(null);
-  useEffect(() => { if (!plugin && plugins[0]) setPlugin(plugins[0].id); }, [plugins, plugin]);
-  async function loadContracts() { try { const environment = mode === "WEBULL_UAT" || feed === "UAT" ? "WEBULL_UAT" : "WEBULL_LIVE"; const values = await request<Array<{ symbol: string; name?: string; contract_month: string }>>(`/futures/contracts/${environment}?code=${encodeURIComponent(productCode)}`); setContracts(values.filter(item => item.symbol && item.contract_month)); setContractError(""); } catch (reason) { setContractError(String(reason)); } }
-  async function inspect(item: StrategyInstance) { setDetail(await request<StrategyDetail>(`/instances/${item.id}/detail`)); }
-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); const selected = plugins.find(item => item.id === data.get("plugin")); const parameters = JSON.parse(String(data.get("parameters") || "{}")); const contractMode = String(data.get("contract_mode") || ""); await request("/instances", { method: "POST", body: JSON.stringify({ name: data.get("name"), plugin_id: selected?.id, plugin_version: selected?.version, mode: data.get("mode"), feed_source: data.get("feed"), account_id: data.get("account"), symbols: String(data.get("symbols")).split(",").map(s => s.trim().toUpperCase()), parameters, replay_path: data.get("replay_path") || null, replay_speed: Number(data.get("replay_speed") || 1), risk: { max_position: String(data.get("max_position")), max_notional: String(data.get("max_notional")), max_daily_realized_loss: String(data.get("max_loss")), max_open_orders: 50, max_orders_per_minute: 60, allowed_symbols: [] }, contract: contractMode ? { mode: contractMode, product_code: data.get("product_code"), current_symbol: String(data.get("symbols")).split(",")[0].trim().toUpperCase(), contracts } : null }) }); form.reset(); reload(); }
-  return <><div className="two-column"><section className="panel"><div className="panel-title"><div><h2>{t("strategies")}</h2><p>{instances.length} configured</p></div></div><StrategyTable t={t} instances={instances} positions={positions} reload={reload} onInspect={inspect} /></section>
-    <section className="panel form-panel"><h2>{t("createStrategy")}</h2><form onSubmit={submit}><label>{t("name")}<input name="name" required placeholder="Morning MGC" /></label><label>{t("plugin")}<select name="plugin" required value={plugin} onChange={e => setPlugin(e.target.value)}>{plugins.map(item => <option value={item.id} key={item.id}>{item.name.en} · {item.version}</option>)}</select></label><div className="form-row"><label>{t("mode")}<select name="mode" value={mode} onChange={e => setMode(e.target.value)}><option value="LOCAL_SIM">LOCAL_SIM</option><option value="WEBULL_UAT">WEBULL_UAT</option><option value="WEBULL_LIVE">WEBULL_LIVE</option></select></label><label>{t("dataSource")}<select name="feed" value={feed} onChange={e => setFeed(e.target.value)}><option value="REPLAY">Replay</option><option value="PRODUCTION">Webull production</option><option value="UAT">Webull UAT</option></select></label></div>{feed === "REPLAY" && <div className="form-row"><label>{t("replayPath")}<input name="replay_path" placeholder="recordings/session.jsonl" /></label><label>{t("replaySpeed")}<input name="replay_speed" type="number" min="0.01" max="1000" step="0.01" defaultValue="1" /></label></div>}<label>{t("account")}<input name="account" list="sim-account-options" required placeholder={mode === "LOCAL_SIM" ? "SIM account" : "Webull account ID"} /><datalist id="sim-account-options">{accounts.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</datalist></label><label>{t("symbols")}<input name="symbols" list="futures-contract-options" required placeholder="MGCQ6" /><datalist id="futures-contract-options">{contracts.map(item => <option value={item.symbol} key={item.symbol}>{item.name || item.contract_month}</option>)}</datalist></label><div className="form-row"><label>{t("futuresBinding")}<select name="contract_mode"><option value="">{t("notFutures")}</option><option value="FIXED">{t("fixedContract")}</option><option value="AUTO_ROLL">{t("autoRoll")}</option></select></label><label>{t("productCode")}<input name="product_code" placeholder="MGC" value={productCode} onChange={event => setProductCode(event.target.value.toUpperCase())} /></label></div><button type="button" className="secondary" disabled={!productCode} onClick={loadContracts}>{t("loadContracts")}</button>{contractError && <p className="field-error">{contractError}</p>}<label>{t("parametersJson")}<textarea name="parameters" defaultValue="{}" rows={3} /></label><div className="form-row"><label>{t("maxPosition")}<input name="max_position" defaultValue="100" /></label><label>{t("maxNotional")}<input name="max_notional" defaultValue="1000000" /></label></div><label>{t("maxDailyLoss")}<input name="max_loss" defaultValue="5000" /></label><button className="primary" disabled={!plugins.length || (mode === "LOCAL_SIM" && !accounts.length)}>{t("create")}</button></form></section>
-  </div>{detail && <StrategyDetailPanel t={t} detail={detail} close={() => setDetail(null)} />}</>;
-}
-
-function StrategyDetailPanel({ t, detail, close }: { t: T; detail: StrategyDetail; close: () => void }) {
-  return <section className="panel detail-panel"><div className="panel-title"><div><h2>{detail.instance.config.name}</h2><p>{detail.instance.id} · {detail.instance.mode}{detail.expiry_state ? ` · ${detail.expiry_state}` : ""}</p></div><button className="secondary" onClick={close}>{t("close")}</button></div><div className="detail-grid"><div><h3>{t("orders")}</h3>{detail.orders.length ? detail.orders.slice(-20).reverse().map(order => <div className="detail-row" key={order.id}><span>{order.command.symbol} · {order.command.side} {order.command.quantity}</span><strong>{order.status}</strong><small>{order.command.origin} · {order.command.order_type}</small></div>) : <p className="muted">{t("none")}</p>}</div><div><h3>{t("fills")}</h3>{detail.fills.length ? detail.fills.slice(-20).reverse().map(fill => <div className="detail-row" key={fill.id}><span>{fill.symbol} · {fill.side} {fill.quantity}</span><strong>@ {fill.price}</strong><small>{new Date(fill.filled_at).toLocaleString()}</small></div>) : <p className="muted">{t("none")}</p>}</div><div><h3>{t("runHistory")}</h3>{detail.runs.length ? detail.runs.map(run => <div className="detail-row" key={run.id}><span>{run.status}</span><small>{new Date(run.started_at).toLocaleString()}</small></div>) : <p className="muted">{t("none")}</p>}</div><div><h3>{t("logs")}</h3>{detail.events.length ? detail.events.slice(0, 20).map(event => <div className="detail-row" key={event.id}><span>{event.kind}</span><small>{new Date(event.created_at).toLocaleString()}</small></div>) : <p className="muted">{t("none")}</p>}</div></div></section>;
-}
-
-function Accounts({ t, accounts, reload }: { t: T; accounts: SimAccount[]; reload: () => void }) {
-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = event.currentTarget; const data = Object.fromEntries(new FormData(form)); await request("/simulator/accounts", { method: "POST", body: JSON.stringify({ name: data.name, initial_cash: data.initial_cash, commission_per_unit: data.commission, slippage_bps: data.slippage, latency_ms: Number(data.latency), partial_fills: data.partial === "on", leverage: data.leverage, futures_margin_per_contract: data.futures_margin }) }); form.reset(); reload(); }
-  async function reset(item: SimAccount) { if (!window.confirm(`${t("resetSimulator")} ${item.name}?`)) return; await request(`/simulator/accounts/${item.id}/reset`, { method: "POST", body: "{}" }); reload(); }
-  return <div className="two-column"><section className="panel"><div className="panel-title"><div><h2>{t("simulatorAccounts")}</h2><p>{t("simulatorDesc")}</p></div></div><div className="account-list">{accounts.map(item => <article key={item.id}><div className="account-icon">SIM</div><div><strong>{item.name}</strong><span>{item.id}</span></div><div className="account-balance"><strong>${Number(item.cash).toLocaleString()}</strong><span>{item.slippage_bps} bps · {item.latency_ms} ms</span></div><button className="secondary" onClick={() => reset(item)}>{t("reset")}</button></article>)}</div></section>
-    <section className="panel form-panel"><h2>{t("newSimulator")}</h2><form onSubmit={submit}><label>{t("name")}<input name="name" required placeholder="Primary simulator" /></label><div className="form-row"><label>{t("initialFunds")}<input name="initial_cash" type="number" defaultValue="100000" min="1" /></label><label>{t("commission")}<input name="commission" type="number" defaultValue="0" min="0" step="0.01" /></label></div><div className="form-row"><label>{t("slippage")}<input name="slippage" type="number" defaultValue="0" min="0" step="0.1" /></label><label>{t("latency")}<input name="latency" type="number" defaultValue="0" min="0" /></label></div><div className="form-row"><label>{t("leverage")}<input name="leverage" type="number" defaultValue="1" min="1" step="0.1" /></label><label>{t("futuresMargin")}<input name="futures_margin" type="number" defaultValue="0" min="0" step="1" /></label></div><label className="check"><input name="partial" type="checkbox" defaultChecked />{t("partialFills")}</label><button className="primary">{t("create")}</button></form></section>
-  </div>;
-}
-
-function SystemPage({ t, health, plugins }: { t: T; health: Health | null; plugins: Plugin[] }) {
-  const [result, setResult] = useState("");
-  async function validate() { const rows = await request<Array<{ status: string }>>("/plugins/validate", { method: "POST" }); setResult(rows.every(item => item.status === "ok") ? t("allGood") : JSON.stringify(rows)); }
-  return <><section className="metrics"><Metric label="API" value={health?.status || "—"} note="127.0.0.1" /><Metric label="UAT" value={health?.uat_configured ? t("configured") : t("missing")} note="Webull SDK" /><Metric label={t("production")} value={health?.production_configured ? t("configured") : t("missing")} note={`${t("liveGate")}: ${health?.live_enabled ? t("enabled") : t("disabled")}`} /><Metric label={t("plugins")} value={String(plugins.length)} note={t("immutableVersions")} /></section><section className="panel system-grid"><div><h2>{t("connections")}</h2><Status label="SQLite" value={health?.database || "—"} ok /><Status label="Webull UAT" value={health?.uat_configured ? t("configured") : t("missing")} ok={!!health?.uat_configured} /><Status label="Webull production" value={health?.production_configured ? t("configured") : t("missing")} ok={!!health?.production_configured} /></div><div><h2>{t("validation")}</h2><p className="muted">{t("validation")}</p><button className="secondary" onClick={validate}>{t("validate")}</button>{result && <p className="validation-result">{result}</p>}</div></section></>;
-}
-
-function Status({ label, value, ok }: { label: string; value: string; ok: boolean }) { return <div className="status-row"><span><i className={ok ? "ok" : "idle"} />{label}</span><strong>{value}</strong></div>; }
 
 export default App;

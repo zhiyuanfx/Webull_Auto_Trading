@@ -1,72 +1,75 @@
-export type Language = "en" | "zh";
 export type Theme = "light" | "dark";
-export type Page = "dashboard" | "strategies" | "accounts" | "system";
+export type Page = "dashboard" | "route" | "orders" | "positions" | "activity" | "settings";
 
-export interface Plugin {
-  id: string;
-  version: string;
-  name: { en: string; zh_cn: string };
-  description: { en: string; zh_cn: string };
-  assets: string[];
-  parameters: Record<string, unknown>;
-  source_hash: string;
-}
-
-export interface StrategyInstance {
-  id: string;
-  plugin_id: string;
-  plugin_version: string;
-  plugin_source_hash: string;
-  mode: "LOCAL_SIM" | "WEBULL_UAT" | "WEBULL_LIVE";
-  account_id: string;
-  feed_source: string;
-  state: string;
-  config: {
-    name: string;
-    symbols: string[];
-    parameters: Record<string, unknown>;
-  };
-  worker?: { alive: boolean; pid: number };
-}
-
-export interface SimAccount {
-  id: string;
+export interface Route {
+  route_id: string;
   name: string;
-  initial_cash: string;
-  cash: string;
-  commission_per_unit: string;
-  slippage_bps: string;
-  latency_ms: number;
-  partial_fills: number;
-  leverage: string;
-  futures_margin_per_contract: string;
-}
-
-export interface Position {
-  strategy_instance_id: string;
-  symbol: string;
-  quantity: string;
-  average_price: string;
-  realized_pnl: string;
+  account_id: string;
+  enabled: boolean;
+  allowed_symbols: string[];
+  max_quantity: string;
+  max_notional: string;
+  accepted_order_types: string[];
+  created_at?: string;
+  updated_at?: string;
+  secret_configured: boolean;
 }
 
 export interface Health {
   status: string;
   database: string;
-  uat_configured: boolean;
-  production_configured: boolean;
-  live_enabled: boolean;
-  workers: unknown[];
-  feed_age_ms: number | null;
-  market_connections: Array<{ feed: string; category: string }>;
+  webull_configured: boolean;
+  execution_enabled: boolean;
+  token_dir: string;
+  routes: Route[];
 }
 
-export interface StrategyDetail {
-  instance: StrategyInstance;
-  orders: Array<{ id: string; status: string; filled_quantity: string; command: { symbol: string; side: string; quantity: string; order_type: string; origin: string } }>;
-  fills: Array<{ id: string; symbol: string; side: string; quantity: string; price: string; filled_at: string }>;
-  positions: Position[];
-  runs: Array<{ id: string; status: string; started_at: string; ended_at?: string }>;
-  events: Array<{ id: number; kind: string; created_at: string; payload: Record<string, unknown> }>;
-  expiry_state: string | null;
+export interface EventRow {
+  id: number;
+  route_id: string;
+  event_id: string;
+  action: string;
+  symbol?: string;
+  status: string;
+  payload: Record<string, unknown>;
+  normalized: Record<string, unknown>;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrderRow {
+  id: number;
+  event_pk: number;
+  route_id: string;
+  account_id: string;
+  client_order_id?: string;
+  target_client_order_id?: string;
+  webull_order_id?: string;
+  action: string;
+  symbol?: string;
+  side?: string;
+  status: string;
+  order: Record<string, unknown>;
+  preview: Record<string, unknown>;
+  response: Record<string, unknown>;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ActivityRow {
+  id: number;
+  kind: string;
+  level: string;
+  message: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface PositionsResponse {
+  account_id: string;
+  positions: Array<Record<string, unknown>>;
+  stale?: boolean;
+  error?: string;
 }

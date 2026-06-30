@@ -1,43 +1,40 @@
-# Webull Strategy Desk Agent Guide
+# Webull Bridge Agent Guide
 
 ## Bootstrap every session
 
-1. Read this file and the nearest nested `AGENTS.md` before editing.
+1. Read this file before editing.
 2. Run `git status --short`; preserve unrelated user changes.
-3. Read the relevant architecture decision in `docs/decisions.md`.
+3. Read `docs/decisions.md`.
 4. For Webull behavior, fetch the current official `developer.webull.com` page. Never
    guess endpoint fields, enums, SDK method names, hosts, or entitlement behavior.
-5. Default all execution and tests to `LOCAL_SIM`. Never transmit a production order.
+5. Ordinary tests must not call Webull or place live orders. Live order transmission only
+   happens through explicit user operation of the bridge with safety switches enabled.
 
 ## Architecture
 
-- `src/strategy_desk/domain.py`: broker-neutral immutable domain values.
-- `strategy.py`, `order_session.py`, `schedule.py`, and `supervisor.py`: strategy contract,
-  credential-free order sessions, schedules, process isolation, and IPC.
-- `gateway.py`: execution gateway and simulator. Only gateways may hold broker clients.
-- `persistence.py`: SQLite audit ledger and restored strategy-local order state.
-- `futures.py`: fixed/auto-roll resolution and independent expiry guard.
-- `webull.py`: lazy official-SDK boundary for account, order, and event APIs.
-- `api.py`: localhost FastAPI/WS control plane; `frontend/`: operational UI.
-- `strategies/`: source-first plugins; its nested guide is mandatory for plugin work.
+- `src/webull_bridge/domain.py`: webhook schema, command enums, secret hashing, and ID helpers.
+- `persistence.py`: SQLite routes, webhook events, orders, activity, and position snapshots.
+- `webull.py`: live-only official SDK boundary for production Trading API calls.
+- `executor.py`: validates queued events against route limits and executes Webull commands.
+- `api.py`: FastAPI control plane plus TradingView webhook intake.
+- `frontend/`: local operational UI.
 
-Strategies decide when and how to trade and manage their own tickets through an injected
-`OrderSession`. The gateway owns credentials, transport, validation, idempotency, rate
-limits, and reconciliation. It must never invent a strategy entry, exit, price, or size.
+TradingView/Pine Script owns strategy logic and market data. The bridge must not invent
+entries, exits, symbols, prices, or sizes. It only authenticates, validates, deduplicates,
+persists, and executes explicit instructions.
 
 ## Safety invariants
 
-- `.env`, access tokens, account secrets, and live payloads are never committed or logged.
-- Strategy workers do not inherit Webull credential variables or receive gateway/broker clients.
-- Official-SDK tokens are cached only under ignored `.runtime/webull_tokens/<mode>` directories.
-- Worker startup is acknowledged before an instance becomes RUNNING; orphaned or crashed workers
-  become DEGRADED and their active run is closed.
-- A `client_order_id` is unique per account, stable, and at most 32 characters.
-- Submitted, partial, filled, cancelled, failed, rejected, and unknown are distinct states.
-- Roll, expiry, and emergency orders are visibly tagged `SYSTEM_ROLL`, `SYSTEM_EXPIRY`,
-  or `SYSTEM_EMERGENCY`.
-- Virtual strategy positions plus `UNASSIGNED` activity must reconcile to the broker net.
-- CI and ordinary tests perform no external calls. UAT is explicit opt-in; live tests do not exist.
+- `.env`, access tokens, account secrets, webhook secrets, and live payload secrets are never
+  committed or logged.
+- Webhook secrets are verified on intake and stored only as redacted placeholders.
+- `client_order_id` is unique per account, stable, and at most 32 characters.
+- Received, queued, processing, submitted, partial, filled, cancelled, failed, rejected,
+  duplicate, validation_failed, and unknown are distinct states.
+- Global execution and route enablement are safety gates, not simulation/UAT modes.
+- There is no local simulator, no UAT mode, no strategy worker runtime, and no Webull market
+  data stream in this project.
+- CI and ordinary tests perform no external calls and no live trades.
 
 ## Commands
 
@@ -45,11 +42,9 @@ limits, and reconciliation. It must never invent a strategy entry, exit, price, 
 conda env create -f environment.yml
 conda activate webull-strategy-desk
 python -m pip install -e ".[dev,webull]"
-strategy-desk init-db
-strategy-desk validate-strategies
-strategy-desk replay-validate recordings/example.jsonl
-strategy-desk diagnose
-strategy-desk serve --reload
+webull-bridge init-db
+webull-bridge diagnose
+webull-bridge serve --reload
 python -m pytest
 ruff check .
 cd frontend && npm ci && npm run dev
@@ -60,12 +55,8 @@ uv lock  # update dependency metadata only; do not use uv to run project command
 Conda owns the runtime environment. Do not use `uv run` or `uv sync` for ordinary project
 work; they may reconcile the environment before a command. Keep dependency declarations in
 `pyproject.toml`, refresh `uv.lock` after dependency changes, and register the checkout as an
-editable package in the active Conda environment with pip. This is a pointer to the source
-tree, not a copied project.
+editable package in the active Conda environment with pip.
 
 Update this guide when architecture, interfaces, commands, or safety rules change. Work is
 done only when focused tests pass, the UI/API contract remains typed, errors preserve
 actionable context without secrets, and documentation reflects behavior.
-
-Architecture rationale lives in [`docs/decisions.md`](docs/decisions.md). When changing an
-invariant, update both that record and this guide in the same change.

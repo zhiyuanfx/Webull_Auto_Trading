@@ -3,9 +3,9 @@ requires = ["hatchling", "editables"]
 build-backend = "hatchling.build"
 
 [project]
-name = "webull-strategy-desk"
+name = "webull-bridge"
 version = "0.1.0"
-description = "Local strategy/EA management for Webull stocks and futures"
+description = "Local TradingView webhook bridge for live Webull order execution"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
@@ -13,7 +13,6 @@ dependencies = [
   "pydantic>=2.9,<3",
   "pydantic-settings>=2.5,<3",
   "python-dotenv>=1.0,<2",
-  "PyYAML>=6.0,<7",
   "uvicorn[standard]>=0.30,<1",
 ]
 
@@ -28,17 +27,16 @@ dev = [
 ]
 
 [project.scripts]
-strategy-desk = "strategy_desk.cli:main"
+webull-bridge = "webull_bridge.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/strategy_desk"]
+packages = ["src/webull_bridge"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "strategies"]
+testpaths = ["tests"]
 addopts = "-q"
 markers = [
   "integration: opt-in external integration tests",
-  "uat: tests that can call Webull UAT when explicitly enabled",
 ]
 
 [tool.ruff]

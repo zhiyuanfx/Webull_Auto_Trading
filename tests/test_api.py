@@ -1,83 +1,79 @@
 from fastapi.testclient import TestClient
 
-from strategy_desk.api import create_app
-from strategy_desk.config import Settings
-from strategy_desk.persistence import Ledger
+from webull_bridge.api import app
+from webull_bridge.config import get_settings
 
 
-def test_health_and_create_simulator_account(tmp_path):
-    settings = Settings(
-        strategy_desk_db_path=tmp_path / "api.sqlite3",
-        strategy_root="strategies",
-    )
-    with TestClient(create_app(settings)) as client:
-        frontend = client.get("/")
-        assert frontend.status_code == 200
-        assert "Strategy Desk" in frontend.text
-        assert client.get("/api/health").json()["status"] == "ok"
-        response = client.post(
-            "/api/simulator/accounts",
-            json={"name": "Test", "initial_cash": "50000"},
-        )
-        assert response.status_code == 201
-        account = client.get("/api/simulator/accounts").json()[0]
-        assert account["cash"] == "50000"
-        assert account["leverage"] == "1"
-        reset = client.post(f"/api/simulator/accounts/{account['id']}/reset", json={})
-        assert reset.status_code == 201
-        assert reset.json()["id"] != account["id"]
-        assert len(client.get("/api/simulator/accounts").json()) == 2
+def test_webhook_secret_validation_and_duplicate(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WEBULL_BRIDGE_DB_PATH", str(tmp_path / "bridge.db"))
+    monkeypatch.setenv("BRIDGE_DEFAULT_SECRET", "secret")
+    monkeypatch.setenv("WEBULL_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("BRIDGE_EXECUTION_ENABLED", "false")
+    get_settings.cache_clear()
 
-
-def test_startup_marks_orphaned_running_instance_degraded(tmp_path):
-    database = tmp_path / "recovery.sqlite3"
-    ledger = Ledger(database)
-    ledger.initialize()
-    ledger.save_instance(
-        {
-            "id": "orphan",
-            "plugin_id": "example_momentum",
-            "plugin_version": "0.1.0",
-            "plugin_source_hash": "old",
-            "mode": "LOCAL_SIM",
-            "account_id": "SIM-OLD",
-            "feed_source": "REPLAY",
-            "state": "RUNNING",
-            "config": {},
-        }
-    )
-    settings = Settings(strategy_desk_db_path=database, strategy_root="strategies")
-    with TestClient(create_app(settings)) as client:
-        assert client.get("/api/instances").json()[0]["state"] == "DEGRADED"
-    assert ledger.audit_events("orphan")[0]["kind"] == "STALE_RUNTIME_RECOVERED"
-
-
-def test_live_start_requires_environment_gate_even_with_confirmation(tmp_path):
-    settings = Settings(
-        strategy_desk_db_path=tmp_path / "live-gate.sqlite3",
-        strategy_root="strategies",
-        webull_prod_app_key="prod-key",
-        webull_prod_app_secret="prod-secret",
-        webull_live_enabled=False,
-    )
-    with TestClient(create_app(settings)) as client:
-        create = client.post(
-            "/api/instances",
+    with TestClient(app) as client:
+        bad = client.post(
+            "/webhook/tradingview/tv",
             json={
-                "name": "Live gate",
-                "plugin_id": "example_momentum",
-                "plugin_version": "0.1.0",
-                "mode": "WEBULL_LIVE",
-                "feed_source": "REPLAY",
-                "account_id": "real-account",
-                "symbols": ["AAPL"],
+                "secret": "wrong",
+                "event_id": "evt-1",
+                "action": "BUY",
+                "symbol": "1OZ",
+                "quantity": "1",
             },
         )
-        assert create.status_code == 201
-        start = client.post(
-            f"/api/instances/{create.json()['id']}/start",
-            json={"live_confirmation": "ENABLE LIVE TRADING"},
+        assert bad.status_code == 401
+
+        good = client.post(
+            "/webhook/tradingview/tv",
+            json={
+                "secret": "secret",
+                "event_id": "evt-1",
+                "action": "BUY",
+                "symbol": "1OZ",
+                "quantity": "1",
+            },
         )
-        assert start.status_code == 409
-        assert "WEBULL_LIVE_ENABLED=true" in start.json()["detail"]
-        assert client.get("/api/health").json()["workers"] == []
+        assert good.status_code == 200
+        assert good.json()["status"] == "queued"
+
+        duplicate = client.post(
+            "/webhook/tradingview/tv",
+            json={
+                "secret": "secret",
+                "event_id": "evt-1",
+                "action": "BUY",
+                "symbol": "1OZ",
+                "quantity": "1",
+            },
+        )
+        assert duplicate.status_code == 200
+        assert duplicate.json()["status"] == "duplicate"
+
+        events = client.get("/api/events").json()
+        assert len(events) == 1
+        assert (
+            "secret" not in events[0]["payload"] or events[0]["payload"]["secret"] == "<redacted>"
+        )
+
+
+def test_health_shape_is_ui_compatible(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WEBULL_BRIDGE_DB_PATH", str(tmp_path / "bridge.db"))
+    monkeypatch.setenv("BRIDGE_DEFAULT_SECRET", "secret")
+    monkeypatch.setenv("WEBULL_ACCOUNT_ID", "acct")
+    get_settings.cache_clear()
+
+    with TestClient(app) as client:
+        health = client.get("/api/health")
+
+    assert health.status_code == 200
+    body = health.json()
+    assert {
+        "status",
+        "database",
+        "webull_configured",
+        "execution_enabled",
+        "token_dir",
+        "routes",
+    } <= set(body)
+    assert "secret_hash" not in body["routes"][0]

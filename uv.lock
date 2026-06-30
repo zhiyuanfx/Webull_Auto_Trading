@@ -757,27 +757,7 @@ wheels = [
 ]
 
 [[package]]
-name = "webull-openapi-python-sdk"
-version = "2.0.12"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cachetools" },
-    { name = "cryptography" },
-    { name = "grpcio" },
-    { name = "jmespath" },
-    { name = "paho-mqtt" },
-    { name = "protobuf" },
-    { name = "requests" },
-    { name = "six" },
-    { name = "urllib3" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ac/4f/27a0877bab13ca782149d4f36cf3f85ef1e75ee5dab7e1b13875d4fc037c/webull_openapi_python_sdk-2.0.12.tar.gz", hash = "sha256:0cb764083d829b6aadb51fce1f57731450604f8d6e694d29588e702b1a493981", size = 92781, upload-time = "2026-06-24T07:20:34.072Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/cd/0c/e46d224b2d33b2738d8b4626e5aa547cc3c563d80204a7c9748b7330c880/webull_openapi_python_sdk-2.0.12-py3-none-any.whl", hash = "sha256:65a47dd8cf74ab06e7765c04435cea755c4d4901bbcb8a9dfca48f62dd68e0ab", size = 286728, upload-time = "2026-06-24T07:20:33.022Z" },
-]
-
-[[package]]
-name = "webull-strategy-desk"
+name = "webull-bridge"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -785,7 +765,6 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
-    { name = "pyyaml" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -811,9 +790,28 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24,<1" },
     { name = "python-dotenv", specifier = ">=1.0,<2" },
-    { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.7,<1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30,<1" },
     { name = "webull-openapi-python-sdk", marker = "extra == 'webull'" },
 ]
 provides-extras = ["webull", "dev"]
+
+[[package]]
+name = "webull-openapi-python-sdk"
+version = "2.0.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cachetools" },
+    { name = "cryptography" },
+    { name = "grpcio" },
+    { name = "jmespath" },
+    { name = "paho-mqtt" },
+    { name = "protobuf" },
+    { name = "requests" },
+    { name = "six" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/4f/27a0877bab13ca782149d4f36cf3f85ef1e75ee5dab7e1b13875d4fc037c/webull_openapi_python_sdk-2.0.12.tar.gz", hash = "sha256:0cb764083d829b6aadb51fce1f57731450604f8d6e694d29588e702b1a493981", size = 92781, upload-time = "2026-06-24T07:20:34.072Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/0c/e46d224b2d33b2738d8b4626e5aa547cc3c563d80204a7c9748b7330c880/webull_openapi_python_sdk-2.0.12-py3-none-any.whl", hash = "sha256:65a47dd8cf74ab06e7765c04435cea755c4d4901bbcb8a9dfca48f62dd68e0ab", size = 286728, upload-time = "2026-06-24T07:20:33.022Z" },
+]
