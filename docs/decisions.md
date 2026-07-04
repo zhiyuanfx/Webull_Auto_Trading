@@ -1,40 +1,39 @@
 # Architecture Decisions
 
-## TradingView owns strategy logic
+## Legacy bridge removed
 
-The project is no longer a strategy desk. TradingView/Pine Script owns market data, strategy
-rules, alert timing, symbols, sizes, and prices. The local app is a bridge that receives a
-webhook instruction and executes it on Webull after validation.
+The old external-alert bridge has been removed from the project. The repo is being reset for
+Python-native strategies that consume InsightSentry streaming data and use Webull only for
+account and trading operations.
 
-## Live-only Webull execution
+## Minimal Webull foundation
 
-The bridge uses the production Webull Trading API through the official Python SDK. UAT and
-local simulation were removed because the intended operating model is direct low-size live
-testing and live execution. Safety is provided by validation, idempotency, local persistence,
-global execution pause, per-route pause, route limits, and explicit confirmations.
+The Webull Trading API boundary remains because account lookup, positions, open orders, and
+order API access are useful for the next runtime. The wrapper uses the official Python SDK
+and production token cache. Endpoint fields, SDK method names, hosts, and entitlement
+behavior must be verified against current official Webull documentation before any Webull
+behavior changes.
 
-## Local-only intake
+## No strategy runtime yet
 
-Version 1 is fully local. TradingView reaches the FastAPI webhook endpoint through a
-user-managed public HTTPS tunnel or port-forwarder. The app does not implement Cloudflare,
-AWS, serverless workers, remote queues, or cloud storage. Webhook intake persists valid
-events locally before any order work.
-
-## Fast webhook response
-
-TradingView webhook responses are delivery receipts, not broker execution acknowledgements.
-The bridge validates the secret/schema, deduplicates, stores the event in SQLite, and returns
-quickly. Webull preview/place/cancel/replace work happens from the local queue after intake.
+This cleanup does not add an InsightSentry client, strategy engine, scheduler, persistence
+model, or order executor. Those will be designed after the repository no longer carries the
+old bridge abstractions.
 
 ## Secret and credential handling
 
 Personal Webull credentials live in gitignored `.env` and SDK tokens live under ignored
-`.runtime/webull_tokens/live`. Webhook shared secrets are compared by hash and are not
-stored in event history. Logs and error messages must redact Webull keys/secrets and webhook
-secrets.
+`.runtime/webull_tokens/live`. Diagnostics and raw account lookup output must redact
+sensitive fields and must not print app keys, app secrets, access tokens, passwords, or
+authorization material.
 
 ## Conda runtime ownership
 
 The existing `webull-strategy-desk` Conda environment remains the owned runtime because it
-has already verified live Webull order placement. The project is installed editable with
+has already verified the Webull SDK setup. The project is installed editable with
 `python -m pip install -e ".[dev,webull]"`; normal commands do not use `uv run` or `uv sync`.
+
+## Offline ordinary tests
+
+Ordinary tests cover configuration, account response summarization, redaction, and Webull
+error sanitization. They must not call Webull, InsightSentry, or submit live orders.

@@ -5,7 +5,7 @@ import io
 import logging
 from typing import Any
 
-from webull_bridge.config import Settings
+from webull_auto_trading.config import Settings
 
 PROD_HTTP_HOST = "api.webull.com"
 
@@ -105,9 +105,9 @@ class WebullTradingClient:
         except WebullError:
             raise
         except Exception as exc:
-            raise WebullError(type(exc).__name__, self._safe_error_message(exc)) from exc
+            raise WebullError(type(exc).__name__, self.safe_error_message(exc)) from exc
 
-    def _safe_error_message(self, exc: Exception) -> str:
+    def safe_error_message(self, exc: Exception) -> str:
         message = str(exc) or type(exc).__name__
         for value in (self.settings.webull_prod_app_key, self.settings.webull_prod_app_secret):
             if value:
@@ -126,3 +126,4 @@ class WebullTradingClient:
             str(payload.get("error_code", f"HTTP_{response.status_code}")),
             str(payload.get("message", "Webull request failed")),
         )
+

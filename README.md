@@ -1,12 +1,14 @@
-# Webull Bridge
+# Webull Auto Trading
 
-Local TradingView-to-Webull bridge. TradingView/Pine Script owns market data, strategy
-logic, and alert generation. This app receives TradingView JSON webhooks, validates a
-shared secret, stores the event locally, and executes matching live Webull orders.
+Python foundation for the next Webull auto-trading project. The old external-alert bridge
+has been removed so the repo can be rebuilt around InsightSentry streaming data and
+Python-native strategy logic.
 
-There is no local simulator, no UAT mode, no strategy worker runtime, and no Webull market
-data stream in this rebuild. All normal tests are offline and mocked; live order submission
-only happens through the running bridge when the global and route safety switches allow it.
+The current baseline keeps only the reusable Webull pieces: environment-backed credential
+settings, SDK token cache configuration, account id discovery, safe diagnostics, and a small
+official-SDK wrapper for account, position, open-order, preview, place, replace, and cancel
+operations. It does not include an InsightSentry client, strategy runtime, executor, API
+server, database, or UI yet.
 
 ## Quick Start
 
@@ -16,82 +18,54 @@ Use the existing Conda environment that already works with the Webull SDK:
 conda activate webull-strategy-desk
 python -m pip install -e ".[dev,webull]"
 cp .env.example .env
-webull-bridge init-db
-webull-bridge serve --reload
+webull-auto-trading diagnose
 ```
 
-In another terminal:
+Discover Webull account id candidates from the authenticated SDK session:
 
 ```bash
-cd frontend
-npm ci
-npm run dev
+webull-auto-trading accounts
 ```
 
-Open <http://127.0.0.1:5173>. TradingView must send webhooks to a public HTTPS URL that
-forwards to the local FastAPI server. The app does not manage Cloudflare, AWS, or tunnels.
+Use `webull-auto-trading accounts --raw` only when you need the redacted raw account-list
+response for troubleshooting. Sensitive keys such as tokens, app keys, app secrets,
+passwords, and authorization fields are replaced with `<redacted>`.
 
-## Webhook Payload
+## Configuration
 
-Send JSON to:
+`.env` is ignored and should contain only local secrets and machine-specific settings:
 
 ```text
-POST /webhook/tradingview/{route_id}
+WEBULL_REGION=us
+WEBULL_PROD_APP_KEY=
+WEBULL_PROD_APP_SECRET=
+WEBULL_TOKEN_DIR=.runtime/webull_tokens
+WEBULL_PROD_TOKEN_WAIT_SECONDS=300
+WEBULL_ACCOUNT_ID=
 ```
 
-Example:
+SDK tokens are stored under `.runtime/webull_tokens/live`, which is ignored by git. Do not
+commit `.env`, `.runtime/`, Webull logs, account secrets, access tokens, or copied raw API
+payloads containing secrets.
 
-```json
-{
-  "secret": "route-shared-secret",
-  "event_id": "my-strategy-2026-06-30T14:30:00Z-1",
-  "action": "BUY",
-  "symbol": "1OZ",
-  "quantity": "1",
-  "order_type": "MARKET",
-  "strategy": "Example Pine Strategy",
-  "alert": "long-entry",
-  "timeframe": "1"
-}
-```
-
-Defaults are equity, US market, quantity order, regular session, market order, and DAY
-time-in-force. Supported actions are `BUY`, `SELL`, `CANCEL`, `REPLACE`, and `FLATTEN`.
-`LIMIT` requires `limit_price`; `STOP_LOSS` requires `stop_price`; `STOP_LOSS_LIMIT`
-requires both.
-
-Secrets are checked at intake and never stored in the local history. Duplicate
-`event_id` values per route are accepted as duplicates and do not create a second order.
-
-## Operations
+## Commands
 
 ```bash
-webull-bridge diagnose
-webull-bridge accounts
-webull-bridge db-stats
-webull-bridge db-vacuum
-webull-bridge ensure-route tv --account-id YOUR_ACCOUNT --secret YOUR_SECRET
+webull-auto-trading diagnose
+webull-auto-trading accounts
+webull-auto-trading accounts --raw
 ```
-
-The UI provides:
-
-- Dashboard: health, route state, global execution switch, and emergency pause.
-- Webhook Route: route settings, secret rotation, allowed symbols, and sample payload.
-- Orders: webhook/order history with sanitized payloads and Webull responses.
-- Positions: Webull positions refreshed on demand.
-- Activity: local audit trail.
-- Settings: database, token cache, and local tunnel guidance.
 
 ## Verification
 
-Normal verification must not call Webull:
+Normal verification must not call Webull, InsightSentry, or place live orders:
 
 ```bash
 python -m pytest
 ruff check .
-cd frontend && npm run build
 ```
 
 For Webull behavior, use the current official documentation from
-<https://developer.webull.com/apis/>, especially the Trading API order preview, place,
-replace, cancel, open-order, position, SDK, authentication, and token pages.
+<https://developer.webull.com/apis/>, especially the Trading API account/order, SDK,
+authentication, and token pages. For future InsightSentry work, use
+<https://insightsentry.com/docs/ws>.

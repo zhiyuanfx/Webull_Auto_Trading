@@ -1,4 +1,4 @@
-# Webull Bridge Agent Guide
+# Webull Auto Trading Agent Guide
 
 ## Bootstrap every session
 
@@ -7,34 +7,32 @@
 3. Read `docs/decisions.md`.
 4. For Webull behavior, fetch the current official `developer.webull.com` page. Never
    guess endpoint fields, enums, SDK method names, hosts, or entitlement behavior.
-5. Ordinary tests must not call Webull or place live orders. Live order transmission only
-   happens through explicit user operation of the bridge with safety switches enabled.
+5. Ordinary tests must not call Webull, InsightSentry, or place live orders. Live order
+   transmission only happens through explicit user operation of future trading runtime code
+   with safety switches enabled.
 
 ## Architecture
 
-- `src/webull_bridge/domain.py`: webhook schema, command enums, secret hashing, and ID helpers.
-- `persistence.py`: SQLite routes, webhook events, orders, activity, and position snapshots.
-- `webull.py`: live-only official SDK boundary for production Trading API calls.
-- `executor.py`: validates queued events against route limits and executes Webull commands.
-- `api.py`: FastAPI control plane plus TradingView webhook intake.
-- `frontend/`: local operational UI.
+- `src/webull_auto_trading/config.py`: environment-backed settings for Webull credentials,
+  token cache location, and default account id.
+- `src/webull_auto_trading/webull.py`: live-only official SDK boundary for Trading API calls.
+- `src/webull_auto_trading/cli.py`: safe diagnostics and account id discovery helpers.
 
-TradingView/Pine Script owns strategy logic and market data. The bridge must not invent
-entries, exits, symbols, prices, or sizes. It only authenticates, validates, deduplicates,
-persists, and executes explicit instructions.
+The next architecture will use InsightSentry streaming data plus Python strategy code and
+Webull Trading API execution. The old external-alert bridge has been removed. The current
+repo is only a cleaned foundation; do not add strategy runtime, InsightSentry clients, or
+live order automation unless explicitly requested.
 
 ## Safety invariants
 
-- `.env`, access tokens, account secrets, webhook secrets, and live payload secrets are never
-  committed or logged.
-- Webhook secrets are verified on intake and stored only as redacted placeholders.
-- `client_order_id` is unique per account, stable, and at most 32 characters.
-- Received, queued, processing, submitted, partial, filled, cancelled, failed, rejected,
-  duplicate, validation_failed, and unknown are distinct states.
-- Global execution and route enablement are safety gates, not simulation/UAT modes.
-- There is no local simulator, no UAT mode, no strategy worker runtime, and no Webull market
-  data stream in this project.
-- CI and ordinary tests perform no external calls and no live trades.
+- `.env`, access tokens, account secrets, API keys, and live payload secrets are never
+  committed, logged, or echoed.
+- SDK token caches under `.runtime/` and local data under `data/` are ignored and must not be
+  deleted or migrated without explicit confirmation.
+- The Webull SDK wrapper is live-only. Ordinary tests must use mocks and must not call Webull.
+- There is no external-alert intake, local simulator, alternate trading environment,
+  strategy worker runtime, or InsightSentry client in this cleanup baseline.
+- Keep trading logic separate from market-data logic when future runtime code is added.
 
 ## Commands
 
@@ -42,14 +40,10 @@ persists, and executes explicit instructions.
 conda env create -f environment.yml
 conda activate webull-strategy-desk
 python -m pip install -e ".[dev,webull]"
-webull-bridge init-db
-webull-bridge diagnose
-webull-bridge accounts
-webull-bridge serve --reload
+webull-auto-trading diagnose
+webull-auto-trading accounts
 python -m pytest
 ruff check .
-cd frontend && npm ci && npm run dev
-cd frontend && npm run build
 uv lock  # update dependency metadata only; do not use uv to run project commands
 ```
 
@@ -59,5 +53,5 @@ work; they may reconcile the environment before a command. Keep dependency decla
 editable package in the active Conda environment with pip.
 
 Update this guide when architecture, interfaces, commands, or safety rules change. Work is
-done only when focused tests pass, the UI/API contract remains typed, errors preserve
-actionable context without secrets, and documentation reflects behavior.
+done only when focused tests pass, errors preserve actionable context without secrets, and
+documentation reflects behavior.

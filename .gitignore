@@ -14,8 +14,6 @@ htmlcov/
 data/
 .runtime/
 recordings/
-frontend/node_modules/
-frontend/dist/
 *.tsbuildinfo
 webull*_sdk.log
 *.egg-info/
