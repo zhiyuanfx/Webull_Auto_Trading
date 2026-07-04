@@ -44,6 +44,7 @@ conda activate webull-strategy-desk
 python -m pip install -e ".[dev,webull]"
 webull-bridge init-db
 webull-bridge diagnose
+webull-bridge accounts
 webull-bridge serve --reload
 python -m pytest
 ruff check .

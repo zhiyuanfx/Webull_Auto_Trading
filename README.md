@@ -67,6 +67,7 @@ Secrets are checked at intake and never stored in the local history. Duplicate
 
 ```bash
 webull-bridge diagnose
+webull-bridge accounts
 webull-bridge db-stats
 webull-bridge db-vacuum
 webull-bridge ensure-route tv --account-id YOUR_ACCOUNT --secret YOUR_SECRET
