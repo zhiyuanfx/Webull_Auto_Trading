@@ -16,6 +16,9 @@ dependencies = [
 
 [project.optional-dependencies]
 webull = ["webull-openapi-python-sdk"]
+sanity = [
+  "websockets>=15,<17",
+]
 dev = [
   "pytest>=8.3,<9",
   "ruff>=0.7,<1",
