@@ -16,12 +16,20 @@
 - `src/webull_auto_trading/config.py`: environment-backed settings for Webull credentials,
   token cache location, and default account id.
 - `src/webull_auto_trading/webull.py`: live-only official SDK boundary for Trading API calls.
-- `src/webull_auto_trading/cli.py`: safe diagnostics and account id discovery helpers.
+- `src/webull_auto_trading/cli.py`: safe diagnostics, account id discovery helpers, and local
+  runtime commands.
+- `src/webull_auto_trading/runtime.py`: paper-first local runtime coordinator.
+- `src/webull_auto_trading/market_data.py`: InsightSentry quote merge, subscription, and
+  rejection rules.
+- `src/webull_auto_trading/strategy/day_many_bian.py`: first Python EA-style strategy port.
+- `src/webull_auto_trading/order_manager.py`: virtual pending orders and paper fills.
+- `src/webull_auto_trading/api.py`: local FastAPI API for the operator UI.
+- `frontend/`: local React/Vite operator console.
 
-The next architecture will use InsightSentry streaming data plus Python strategy code and
-Webull Trading API execution. The old external-alert bridge has been removed. The current
-repo is only a cleaned foundation; do not add strategy runtime, InsightSentry clients, or
-live order automation unless explicitly requested.
+The runtime uses InsightSentry streaming data plus Python strategy code and Webull
+Trading API reads. The old external-alert bridge has been removed. Live order automation is
+not implemented in this phase; do not add live order placement without an explicit safety
+plan and user request.
 
 ## Safety invariants
 
@@ -30,8 +38,9 @@ live order automation unless explicitly requested.
 - SDK token caches under `.runtime/` and local data under `data/` are ignored and must not be
   deleted or migrated without explicit confirmation.
 - The Webull SDK wrapper is live-only. Ordinary tests must use mocks and must not call Webull.
-- There is no external-alert intake, local simulator, alternate trading environment,
-  strategy worker runtime, or InsightSentry client in this cleanup baseline.
+- Runtime v1 supports only `paper` and `preview` strategy modes; no `live` mode exists.
+- There is no external-alert intake, local simulator, alternate trading environment, or live
+  order worker in this baseline.
 - Keep trading logic separate from market-data logic when future runtime code is added.
 
 ## Commands
@@ -42,9 +51,13 @@ conda activate webull-strategy-desk
 python -m pip install -e ".[dev,webull]"
 webull-auto-trading diagnose
 webull-auto-trading accounts
+webull-auto-trading init-db
+webull-auto-trading serve --reload
+webull-auto-trading run
 python -m pytest
 ruff check .
 uv lock  # update dependency metadata only; do not use uv to run project commands
+cd frontend && npm run build
 ```
 
 Conda owns the runtime environment. Do not use `uv run` or `uv sync` for ordinary project

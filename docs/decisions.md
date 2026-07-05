@@ -14,11 +14,16 @@ and production token cache. Endpoint fields, SDK method names, hosts, and entitl
 behavior must be verified against current official Webull documentation before any Webull
 behavior changes.
 
-## No strategy runtime yet
+## Paper-first multi-strategy runtime
 
-This cleanup does not add an InsightSentry client, strategy engine, scheduler, persistence
-model, or order executor. Those will be designed after the repository no longer carries the
-old bridge abstractions.
+The next runtime baseline is a local Python service with SQLite persistence, a shared
+InsightSentry market-data boundary, strategy instances isolated by `strategy_instance_id`,
+paper virtual orders, and a FastAPI/React operator UI. Strategy instances are configured from
+`config/strategies.yml` and can also be edited through the local API.
+
+The first ported strategy is `day_many_bian`, modeled as a Python state machine with daily
+brackets, reverse-buffer entries after the first cycle, trailing stop updates, optional
+pyramiding, cooldown, max-cycle, and daily-loss controls.
 
 ## Secret and credential handling
 
@@ -35,5 +40,13 @@ has already verified the Webull SDK setup. The project is installed editable wit
 
 ## Offline ordinary tests
 
-Ordinary tests cover configuration, account response summarization, redaction, and Webull
-error sanitization. They must not call Webull, InsightSentry, or submit live orders.
+Ordinary tests cover configuration, account response summarization, redaction, Webull error
+sanitization, quote merging/rejection, daily-bar bootstrap, paper order fills, strategy
+bracket logic, per-instance isolation, and runtime persistence. They must not call Webull,
+InsightSentry, or submit live orders.
+
+## No live order placement in runtime v1
+
+The runtime exposes `paper` and `preview` strategy modes only. Paper mode owns the virtual
+order lifecycle. Preview mode is reserved for paper lifecycle plus verified Webull preview
+calls, but live placement, replacement, and cancellation are out of scope for this phase.

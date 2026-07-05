@@ -15,5 +15,7 @@ data/
 .runtime/
 recordings/
 *.tsbuildinfo
+frontend/node_modules/
+frontend/dist/
 webull*_sdk.log
 *.egg-info/

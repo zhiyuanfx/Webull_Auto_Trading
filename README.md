@@ -1,14 +1,12 @@
 # Webull Auto Trading
 
-Python foundation for the next Webull auto-trading project. The old external-alert bridge
-has been removed so the repo can be rebuilt around InsightSentry streaming data and
-Python-native strategy logic.
+Python foundation for a local, paper-first InsightSentry plus Webull trading runtime. The
+old external-alert bridge has been removed and replaced with Python-native strategy
+instances, SQLite persistence, paper virtual orders, a FastAPI backend, and a React/Vite
+operator console.
 
-The current baseline keeps only the reusable Webull pieces: environment-backed credential
-settings, SDK token cache configuration, account id discovery, safe diagnostics, and a small
-official-SDK wrapper for account, position, open-order, preview, place, replace, and cancel
-operations. It does not include an InsightSentry client, strategy runtime, executor, API
-server, database, or UI yet.
+Runtime v1 supports `paper` and `preview` modes only. It can read Webull account, balance,
+position, and open-order data through the official SDK, but it does not place live orders.
 
 ## Quick Start
 
@@ -16,9 +14,10 @@ Use the existing Conda environment that already works with the Webull SDK:
 
 ```bash
 conda activate webull-strategy-desk
-python -m pip install -e ".[dev,webull]"
+python -m pip install -e ".[dev,webull,sanity]"
 cp .env.example .env
 webull-auto-trading diagnose
+webull-auto-trading init-db
 ```
 
 Discover Webull account id candidates from the authenticated SDK session:
@@ -54,7 +53,22 @@ payloads containing secrets.
 webull-auto-trading diagnose
 webull-auto-trading accounts
 webull-auto-trading accounts --raw
+webull-auto-trading init-db
+webull-auto-trading serve --reload
+webull-auto-trading run
 ```
+
+`serve` starts the local backend on <http://127.0.0.1:8765> by default. The frontend lives in
+`frontend/` and proxies `/api` to that backend during Vite development.
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The first strategy instance config lives in `config/strategies.yml`. It is disabled by
+default and contains no secrets.
 
 ## Verification
 

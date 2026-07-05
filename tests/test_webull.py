@@ -1,3 +1,5 @@
+import asyncio
+
 from webull_auto_trading.config import Settings
 from webull_auto_trading.webull import WebullError, WebullTradingClient
 
@@ -30,3 +32,24 @@ def test_require_success_raises_safe_webull_error() -> None:
         assert exc.message == "Request failed"
     else:
         raise AssertionError("Expected WebullError")
+
+
+def test_account_balance_uses_official_sdk_account_method() -> None:
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, str]:
+            return {"total_net_liquidation_value": "100.00"}
+
+    class AccountV2:
+        def get_account_balance(self, account_id: str) -> Response:
+            assert account_id == "acct-1"
+            return Response()
+
+    client = WebullTradingClient(Settings(_env_file=None))
+    client._client = type("TradeClient", (), {"account_v2": AccountV2()})()
+
+    result = asyncio.run(client.account_balance("acct-1"))
+
+    assert result == {"total_net_liquidation_value": "100.00"}

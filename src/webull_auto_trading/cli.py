@@ -6,6 +6,8 @@ import json
 from typing import Any
 
 from webull_auto_trading.config import Settings, get_settings
+from webull_auto_trading.persistence import RuntimeRepository
+from webull_auto_trading.runtime import RuntimeService
 from webull_auto_trading.webull import WebullError, WebullTradingClient
 
 
@@ -111,6 +113,13 @@ def diagnose_payload(settings: Settings | None = None) -> dict[str, Any]:
         "token_dir": str(live_token_dir),
         "token_dir_exists": live_token_dir.exists(),
         "token_wait_seconds": settings.webull_prod_token_wait_seconds,
+        "runtime_db_path": str(settings.runtime_db_path),
+        "strategies_config_path": str(settings.strategies_config_path),
+        "insightsentry_configured": bool(
+            settings.insightsentry_api_key
+            or settings.insightsentry_websocket_key
+            or settings.insightsentry_rapidapi_key
+        ),
     }
 
 
@@ -126,6 +135,12 @@ def main() -> None:
         action="store_true",
         help="Also print the redacted raw Webull account-list response",
     )
+    commands.add_parser("init-db", help="Create or migrate the local runtime SQLite database")
+    serve = commands.add_parser("serve", help="Run the local FastAPI backend")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--reload", action="store_true")
+    commands.add_parser("run", help="Start the local paper runtime without a UI")
     args = parser.parse_args()
 
     if args.command == "diagnose":
@@ -135,6 +150,25 @@ def main() -> None:
             print_json(asyncio.run(fetch_accounts(raw=args.raw)))
         except WebullError as exc:
             raise SystemExit(f"Webull account lookup failed: {exc.message}") from exc
+    elif args.command == "init-db":
+        settings = get_settings()
+        RuntimeRepository(settings.runtime_db_path).init_db()
+        print_json({"ok": True, "database": str(settings.runtime_db_path)})
+    elif args.command == "serve":
+        try:
+            import uvicorn
+        except ImportError as exc:
+            raise SystemExit("Install runtime dependencies before serving the API") from exc
+        uvicorn.run(
+            "webull_auto_trading.api:app",
+            host=args.host,
+            port=args.port,
+            reload=args.reload,
+        )
+    elif args.command == "run":
+        runtime = RuntimeService(get_settings())
+        runtime.initialize()
+        print_json(runtime.health())
 
 
 if __name__ == "__main__":

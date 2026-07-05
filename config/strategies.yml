@@ -1,0 +1,32 @@
+# Local paper-first strategy instances. This file contains no secrets.
+strategies:
+  - id: demo_day_many_bian_aapl
+    strategy_name: day_many_bian
+    symbol: NASDAQ:AAPL
+    account_id: ""
+    enabled: false
+    mode: paper
+    params:
+      lots: 0.3
+      bracket_buffer_price: 0.01
+      reverse_buffer_price: 5.0
+      stop_loss_distance_price: 7.0
+      take_profit_distance_price: 15.0
+      final_take_profit_distance_price: 1000.0
+      trailing_stop_distance_price: 15.0
+      use_dynamic_trailing_loss_distance: true
+      dynamic_trailing_step_price: 4.0
+      dynamic_trailing_distance_reduction: 1.0
+      min_dynamic_trailing_loss_distance: 7.0
+      daily_loss_limit_percent: 10.0
+      max_cycles_per_day: 5
+      cooldown_seconds: 1
+      use_hybrid_entry_strategy: false
+      enable_pyramiding: false
+      add_step_profit_price: 16.0
+      max_add_orders: 10
+      add_lot_multiplier: 1.0
+      close_round_when_last_sl: true
+      trading_windows:
+        - start: "01:00:00"
+          end: "23:55:00"

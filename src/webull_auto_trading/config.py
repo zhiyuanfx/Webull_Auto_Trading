@@ -16,6 +16,15 @@ class Settings(BaseSettings):
     webull_token_dir: Path = Path(".runtime/webull_tokens")
     webull_prod_token_wait_seconds: int = Field(default=300, ge=30, le=300)
     webull_account_id: str = ""
+    runtime_db_path: Path = Path(".runtime/webull_auto_trading.sqlite3")
+    strategies_config_path: Path = Path("config/strategies.yml")
+    quote_max_staleness_seconds: int = Field(default=30, ge=1, le=3600)
+    allow_delayed_quotes: bool = False
+    insightsentry_api_key: str = ""
+    insightsentry_rapidapi_key: str = ""
+    insightsentry_rapidapi_host: str = "insightsentry.p.rapidapi.com"
+    insightsentry_websocket_key: str = ""
+    insightsentry_websocket_key_expiration: str = ""
 
     @property
     def production_configured(self) -> bool:
@@ -25,4 +34,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

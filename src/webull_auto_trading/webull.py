@@ -63,6 +63,12 @@ class WebullTradingClient:
         response = await self._sdk_response(self._trade_client().account_v2.get_account_list)
         return self._require_success(response)
 
+    async def account_balance(self, account_id: str) -> dict[str, Any]:
+        response = await self._sdk_response(
+            self._trade_client().account_v2.get_account_balance, account_id
+        )
+        return self._require_success(response)
+
     async def positions(self, account_id: str) -> list[dict[str, Any]]:
         response = await self._sdk_response(
             self._trade_client().account_v2.get_account_position, account_id
@@ -126,4 +132,3 @@ class WebullTradingClient:
             str(payload.get("error_code", f"HTTP_{response.status_code}")),
             str(payload.get("message", "Webull request failed")),
         )
-
