@@ -139,6 +139,7 @@ class PaperOrderBook:
                 order.status = OrderStatus.CLOSED
                 order.closed_at = utc_now()
                 order.metadata["close_reason"] = "stop_loss" if stop_hit else "take_profit"
+                order.metadata["close_price"] = order.stop_loss if stop_hit else order.take_profit
                 closed.append(order)
         return closed
 

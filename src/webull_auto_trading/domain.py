@@ -17,7 +17,11 @@ def new_id(prefix: str) -> str:
 
 class ExecutionMode(StrEnum):
     PAPER = "paper"
-    PREVIEW = "preview"
+
+
+class RuntimeMode(StrEnum):
+    TEST = "test"
+    LIVE = "live"
 
 
 class OrderSide(StrEnum):
@@ -130,6 +134,55 @@ class PaperFill:
     quantity: float
     price: float
     filled_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(slots=True)
+class PaperAccount:
+    id: str
+    starting_balance: float = 10_000.0
+    cash_balance: float = 10_000.0
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    current_equity: float = 10_000.0
+    peak_equity: float = 10_000.0
+    max_drawdown: float = 0.0
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(slots=True)
+class PaperPosition:
+    id: str
+    account_id: str
+    strategy_instance_id: str
+    symbol: str
+    side: OrderSide
+    quantity: float
+    average_price: float
+    market_price: float | None = None
+    unrealized_pnl: float = 0.0
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(slots=True)
+class PaperAccountEvent:
+    id: str
+    account_id: str
+    event_type: str
+    amount: float = 0.0
+    message: str = ""
+    payload: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(slots=True)
+class MarketStreamMessage:
+    sequence: int
+    timestamp: datetime
+    strategy_instance_id: str
+    symbol: str
+    type: str
+    raw: dict[str, Any]
 
 
 def _float_or_none(value: Any) -> float | None:

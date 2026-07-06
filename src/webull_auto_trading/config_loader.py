@@ -23,15 +23,12 @@ def load_strategy_instances(path: Path) -> list[StrategyInstance]:
 
 
 def _instance_from_config(item: dict[str, Any]) -> StrategyInstance:
-    mode = ExecutionMode(item.get("mode", "paper"))
-    if mode not in (ExecutionMode.PAPER, ExecutionMode.PREVIEW):
-        raise ValueError("strategy mode must be paper or preview")
     return StrategyInstance(
         id=str(item.get("id") or new_id("st")),
         strategy_name=str(item.get("strategy_name") or "day_many_bian"),
         symbol=str(item["symbol"]),
         account_id=str(item.get("account_id") or ""),
         enabled=bool(item.get("enabled", True)),
-        mode=mode,
+        mode=ExecutionMode.PAPER,
         params=dict(item.get("params") or {}),
     )

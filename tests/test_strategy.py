@@ -126,7 +126,7 @@ def test_global_vs_instance_daily_loss_lock_logic() -> None:
     )
 
 
-def test_strategy_instance_model_uses_paper_or_preview_only() -> None:
+def test_strategy_instance_model_uses_paper_mode() -> None:
     instance = StrategyInstance(
         id="st-1",
         strategy_name="day_many_bian",

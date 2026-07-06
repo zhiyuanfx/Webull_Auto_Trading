@@ -4,7 +4,7 @@
 
 The old external-alert bridge has been removed from the project. The repo is being reset for
 Python-native strategies that consume InsightSentry streaming data and use Webull only for
-account and trading operations.
+read-only live account operations in the current runtime.
 
 ## Minimal Webull foundation
 
@@ -14,12 +14,18 @@ and production token cache. Endpoint fields, SDK method names, hosts, and entitl
 behavior must be verified against current official Webull documentation before any Webull
 behavior changes.
 
-## Paper-first multi-strategy runtime
+## Test/Live multi-strategy runtime
 
-The next runtime baseline is a local Python service with SQLite persistence, a shared
-InsightSentry market-data boundary, strategy instances isolated by `strategy_instance_id`,
-paper virtual orders, and a FastAPI/React operator UI. Strategy instances are configured from
-`config/strategies.yml` and can also be edited through the local API.
+The runtime is a local Python service with SQLite persistence, a shared InsightSentry
+market-data boundary, strategy instances isolated by `strategy_instance_id`, paper virtual
+orders, and a FastAPI/React operator UI. Runtime mode is global:
+
+- `test`: paper trading with real InsightSentry market data.
+- `live`: Webull account reads and live strategy configuration only; execution is disabled.
+
+Strategy instances are configured from `config/strategies.test.yml` or
+`config/strategies.live.yml` based on the active mode and can also be edited through the
+local API until the next mode reload.
 
 The first ported strategy is `day_many_bian`, modeled as a Python state machine with daily
 brackets, reverse-buffer entries after the first cycle, trailing stop updates, optional
@@ -42,11 +48,17 @@ has already verified the Webull SDK setup. The project is installed editable wit
 
 Ordinary tests cover configuration, account response summarization, redaction, Webull error
 sanitization, quote merging/rejection, daily-bar bootstrap, paper order fills, strategy
-bracket logic, per-instance isolation, and runtime persistence. They must not call Webull,
-InsightSentry, or submit live orders.
+bracket logic, per-instance isolation, runtime mode switching, paper account persistence,
+and storage cleanup. They must not call Webull, InsightSentry, or submit live orders.
 
-## No live order placement in runtime v1
+## No live order placement
 
-The runtime exposes `paper` and `preview` strategy modes only. Paper mode owns the virtual
-order lifecycle. Preview mode is reserved for paper lifecycle plus verified Webull preview
-calls, but live placement, replacement, and cancellation are out of scope for this phase.
+Live mode is execution-read-only. The UI and API expose no live place, replace, cancel, or
+flatten commands. Any future live execution phase must re-check current official Webull docs
+and add explicit safety gates.
+
+## Volatile market display
+
+Market quotes and series are not persisted. Runtime code keeps only current quote state in
+memory for strategy decisions and a capped in-memory stream buffer for operator visibility.
+Cleanup may clear legacy `quote_snapshots` and `bars` rows.

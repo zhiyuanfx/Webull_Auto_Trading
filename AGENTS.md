@@ -18,7 +18,7 @@
 - `src/webull_auto_trading/webull.py`: live-only official SDK boundary for Trading API calls.
 - `src/webull_auto_trading/cli.py`: safe diagnostics, account id discovery helpers, and local
   runtime commands.
-- `src/webull_auto_trading/runtime.py`: paper-first local runtime coordinator.
+- `src/webull_auto_trading/runtime.py`: Test/Live local runtime coordinator.
 - `src/webull_auto_trading/market_data.py`: InsightSentry quote merge, subscription, and
   rejection rules.
 - `src/webull_auto_trading/strategy/day_many_bian.py`: first Python EA-style strategy port.
@@ -26,10 +26,10 @@
 - `src/webull_auto_trading/api.py`: local FastAPI API for the operator UI.
 - `frontend/`: local React/Vite operator console.
 
-The runtime uses InsightSentry streaming data plus Python strategy code and Webull
-Trading API reads. The old external-alert bridge has been removed. Live order automation is
-not implemented in this phase; do not add live order placement without an explicit safety
-plan and user request.
+The runtime uses InsightSentry streaming data plus Python strategy code and Webull Trading
+API reads. Test mode owns paper trading and persistence. Live mode is Webull-read-only for
+this phase. The old external-alert bridge has been removed. Do not add live order placement
+without an explicit safety plan and user request.
 
 ## Safety invariants
 
@@ -38,7 +38,9 @@ plan and user request.
 - SDK token caches under `.runtime/` and local data under `data/` are ignored and must not be
   deleted or migrated without explicit confirmation.
 - The Webull SDK wrapper is live-only. Ordinary tests must use mocks and must not call Webull.
-- Runtime v1 supports only `paper` and `preview` strategy modes; no `live` mode exists.
+- Runtime supports global `test` and `live` modes. Live mode has no execution endpoints.
+- Strategy instances do not expose public per-strategy execution modes.
+- Market quote/series display is process-memory only; do not persist new quote or bar data.
 - There is no external-alert intake, local simulator, alternate trading environment, or live
   order worker in this baseline.
 - Keep trading logic separate from market-data logic when future runtime code is added.
@@ -52,6 +54,7 @@ python -m pip install -e ".[dev,webull]"
 webull-auto-trading diagnose
 webull-auto-trading accounts
 webull-auto-trading init-db
+webull-auto-trading cleanup --dry-run
 webull-auto-trading serve --reload
 webull-auto-trading run
 python -m pytest

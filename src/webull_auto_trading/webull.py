@@ -81,12 +81,6 @@ class WebullTradingClient:
         )
         return self._require_success(response)
 
-    async def preview_order(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:
-        response = await self._sdk_response(
-            self._trade_client().order_v3.preview_order, account_id, [order]
-        )
-        return self._require_success(response)
-
     async def place_order(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:
         response = await self._sdk_response(
             self._trade_client().order_v3.place_order, account_id, [order]

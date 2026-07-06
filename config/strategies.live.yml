@@ -1,6 +1,6 @@
-# Legacy fallback strategy instances. Prefer strategies.test.yml and strategies.live.yml.
+# Live-mode strategy instances. Live execution is disabled in this revision.
 strategies:
-  - id: demo_day_many_bian_aapl
+  - id: live_day_many_bian_aapl
     strategy_name: day_many_bian
     symbol: NASDAQ:AAPL
     account_id: ""

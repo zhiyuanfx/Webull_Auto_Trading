@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from webull_auto_trading.domain import QuoteState
 from webull_auto_trading.market_data import (
+    MarketStreamBuffer,
     QuoteBook,
     build_subscription_payload,
     merge_quote_fields,
@@ -80,3 +81,21 @@ def test_parse_market_message_classifies_heartbeat_quote_and_fatal_error() -> No
 
     assert error.kind == "error"
     assert error.fatal is True
+
+
+def test_market_stream_buffer_keeps_latest_twenty_messages() -> None:
+    buffer = MarketStreamBuffer(max_messages=20)
+
+    for sequence in range(25):
+        buffer.append(
+            strategy_instance_id="st-1",
+            symbol="NASDAQ:AAPL",
+            message_type="quote",
+            raw={"sequence": sequence},
+        )
+
+    messages = buffer.list_for_strategy("st-1")
+
+    assert len(messages) == 20
+    assert messages[0].raw["sequence"] == 5
+    assert buffer.list_for_strategy("st-1", since=24)[0].sequence == 25

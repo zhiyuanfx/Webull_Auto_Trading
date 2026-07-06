@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import count
 from typing import Any, Literal
 
-from webull_auto_trading.domain import QuoteState, utc_now
+from webull_auto_trading.domain import MarketStreamMessage, QuoteState, utc_now
 
 LIVE_ENDPOINT = "wss://realtime.insightsentry.com/live"
 FATAL_ERRORS = {
@@ -76,6 +78,46 @@ class QuoteBook:
 
     def all(self) -> list[QuoteState]:
         return list(self._quotes.values())
+
+
+class MarketStreamBuffer:
+    def __init__(self, max_messages: int = 20) -> None:
+        self.max_messages = max_messages
+        self._sequence = count(1)
+        self._messages: dict[str, deque[MarketStreamMessage]] = defaultdict(
+            lambda: deque(maxlen=max_messages)
+        )
+
+    def append(
+        self,
+        *,
+        strategy_instance_id: str,
+        symbol: str,
+        message_type: str,
+        raw: dict[str, Any],
+        timestamp: datetime | None = None,
+    ) -> MarketStreamMessage:
+        message = MarketStreamMessage(
+            sequence=next(self._sequence),
+            timestamp=timestamp or utc_now(),
+            strategy_instance_id=strategy_instance_id,
+            symbol=symbol,
+            type=message_type,
+            raw=raw,
+        )
+        self._messages[strategy_instance_id].append(message)
+        return message
+
+    def list_for_strategy(
+        self,
+        strategy_instance_id: str,
+        *,
+        since: int | None = None,
+    ) -> list[MarketStreamMessage]:
+        messages = list(self._messages.get(strategy_instance_id, ()))
+        if since is None:
+            return messages
+        return [message for message in messages if message.sequence > since]
 
 
 def merge_quote_fields(existing: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:

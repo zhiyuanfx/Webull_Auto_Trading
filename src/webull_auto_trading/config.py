@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     webull_account_id: str = ""
     runtime_db_path: Path = Path(".runtime/webull_auto_trading.sqlite3")
     strategies_config_path: Path = Path("config/strategies.yml")
+    strategies_test_config_path: Path = Path("config/strategies.test.yml")
+    strategies_live_config_path: Path = Path("config/strategies.live.yml")
     quote_max_staleness_seconds: int = Field(default=30, ge=1, le=3600)
     allow_delayed_quotes: bool = False
     insightsentry_api_key: str = ""

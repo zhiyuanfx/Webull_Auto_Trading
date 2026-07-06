@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from webull_auto_trading.config import get_settings
+from webull_auto_trading.domain import RuntimeMode
 from webull_auto_trading.execution import AccountSnapshot, WebullReadService
 from webull_auto_trading.runtime import RuntimeService
 
@@ -16,24 +17,30 @@ class GlobalPausePayload(BaseModel):
     paused: bool
 
 
+class RuntimeModePayload(BaseModel):
+    mode: RuntimeMode
+
+
 class StrategyPayload(BaseModel):
     id: str | None = None
     strategy_name: str = "day_many_bian"
     symbol: str
     account_id: str = ""
     enabled: bool = True
-    mode: str = Field(default="paper", pattern="^(paper|preview)$")
+    mode: str = Field(default="paper", pattern="^paper$")
     params: dict[str, Any] = Field(default_factory=dict)
 
 
-class QuotePayload(BaseModel):
-    code: str
-    bid: float | None = None
-    ask: float | None = None
-    last_price: float | None = None
-    lp_time: float | None = None
-    delay_seconds: int | None = None
-    status: str | None = None
+class PaperDepositPayload(BaseModel):
+    amount: float = Field(gt=0)
+
+
+class CleanupPayload(BaseModel):
+    dry_run: bool = True
+    activity_days: int = Field(default=30, ge=1)
+    paper_history_days: int = Field(default=365, ge=1)
+    closed_cycle_days: int = Field(default=365, ge=1)
+    vacuum: bool = False
 
 
 @lru_cache
@@ -59,6 +66,19 @@ def create_app() -> FastAPI:
     def put_global_pause(payload: GlobalPausePayload) -> dict[str, bool]:
         return get_runtime().set_global_pause(payload.paused)
 
+    @app.get("/api/settings/runtime-mode")
+    def get_runtime_mode() -> dict[str, Any]:
+        runtime = get_runtime()
+        return {
+            "mode": runtime.active_mode().value,
+            "message": runtime.mode_message(),
+            "config_path": str(runtime.mode_config_path()),
+        }
+
+    @app.put("/api/settings/runtime-mode")
+    def put_runtime_mode(payload: RuntimeModePayload) -> dict[str, Any]:
+        return get_runtime().set_runtime_mode(payload.mode)
+
     @app.get("/api/strategies")
     def list_strategies() -> list[dict[str, Any]]:
         return [asdict(item) for item in get_runtime().repository.list_strategy_instances()]
@@ -79,18 +99,25 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="strategy not found") from exc
         return asdict(instance)
 
-    @app.get("/api/market/quotes")
-    def list_quotes() -> list[dict[str, Any]]:
-        return get_runtime().repository.list_quote_snapshots()
+    @app.get("/api/market/streams/strategies")
+    def list_stream_strategies() -> list[dict[str, Any]]:
+        return [
+            {
+                "id": item.id,
+                "strategy_name": item.strategy_name,
+                "symbol": item.symbol,
+                "enabled": item.enabled,
+            }
+            for item in get_runtime().repository.list_strategy_instances()
+            if item.enabled
+        ]
 
-    @app.post("/api/market/quotes")
-    def ingest_quote(payload: QuotePayload) -> dict[str, Any]:
-        messages = get_runtime().ingest_quote_item(payload.model_dump(exclude_none=True))
-        return {"messages": messages}
-
-    @app.get("/api/market/bars")
-    def list_bars() -> list[dict[str, Any]]:
-        return get_runtime().repository.list_table("bars")
+    @app.get("/api/market/streams/{strategy_id}")
+    def list_market_stream(strategy_id: str, since: int | None = None) -> list[dict[str, Any]]:
+        return [
+            asdict(item)
+            for item in get_runtime().stream_buffer.list_for_strategy(strategy_id, since=since)
+        ]
 
     @app.get("/api/orders")
     def list_orders() -> list[dict[str, Any]]:
@@ -102,6 +129,18 @@ def create_app() -> FastAPI:
 
     @app.get("/api/account")
     async def account(refresh: bool = False) -> dict[str, Any]:
+        runtime = get_runtime()
+        if runtime.active_mode() == RuntimeMode.TEST:
+            paper = runtime.repository.recompute_paper_account(
+                market_prices=runtime.current_market_prices()
+            )
+            return {
+                "mode": RuntimeMode.TEST.value,
+                "message": runtime.mode_message(),
+                "paper_account": asdict(paper),
+                "positions": [asdict(item) for item in runtime.repository.list_paper_positions()],
+                "history": runtime.repository.list_paper_history(limit=20),
+            }
         settings = get_settings()
         if not refresh:
             snapshot = AccountSnapshot(
@@ -111,7 +150,47 @@ def create_app() -> FastAPI:
             )
             return asdict(snapshot)
         snapshot = await WebullReadService(settings).snapshot()
-        return asdict(snapshot)
+        return {
+            "mode": RuntimeMode.LIVE.value,
+            "message": runtime.mode_message(),
+            **asdict(snapshot),
+        }
+
+    @app.get("/api/paper-account")
+    def paper_account() -> dict[str, Any]:
+        runtime = get_runtime()
+        account = runtime.repository.recompute_paper_account(
+            market_prices=runtime.current_market_prices()
+        )
+        return {
+            "account": asdict(account),
+            "positions": [asdict(item) for item in runtime.repository.list_paper_positions()],
+        }
+
+    @app.post("/api/paper-account/deposit")
+    def paper_deposit(payload: PaperDepositPayload) -> dict[str, Any]:
+        account = get_runtime().repository.deposit_paper_account(payload.amount)
+        return {"account": asdict(account)}
+
+    @app.post("/api/paper-account/reset")
+    def paper_reset() -> dict[str, Any]:
+        runtime = get_runtime()
+        account = runtime.repository.reset_paper_account()
+        runtime.order_book.orders = []
+        runtime.order_book.fills = []
+        return {"account": asdict(account)}
+
+    @app.get("/api/paper-account/history")
+    def paper_history() -> list[dict[str, Any]]:
+        return get_runtime().repository.list_paper_history()
+
+    @app.get("/api/storage/stats")
+    def storage_stats() -> dict[str, Any]:
+        return get_runtime().repository.storage_stats()
+
+    @app.post("/api/storage/cleanup")
+    def storage_cleanup(payload: CleanupPayload) -> dict[str, Any]:
+        return get_runtime().repository.cleanup(**payload.model_dump())
 
     @app.get("/api/activity")
     def activity() -> list[dict[str, Any]]:

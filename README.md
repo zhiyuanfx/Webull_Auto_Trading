@@ -1,12 +1,13 @@
 # Webull Auto Trading
 
-Python foundation for a local, paper-first InsightSentry plus Webull trading runtime. The
-old external-alert bridge has been removed and replaced with Python-native strategy
-instances, SQLite persistence, paper virtual orders, a FastAPI backend, and a React/Vite
-operator console.
+Python foundation for a local InsightSentry plus Webull trading console. The old
+external-alert bridge has been removed and replaced with Python-native strategy instances,
+SQLite persistence, paper virtual orders, a FastAPI backend, and a React/Vite operator
+console.
 
-Runtime v1 supports `paper` and `preview` modes only. It can read Webull account, balance,
-position, and open-order data through the official SDK, but it does not place live orders.
+Runtime mode is global: `test` mode paper trades against real InsightSentry market data, and
+`live` mode allows Webull account/balance/position/open-order reads through the official SDK.
+Live order placement, replacement, cancellation, and flattening are not implemented.
 
 ## Quick Start
 
@@ -56,6 +57,7 @@ webull-auto-trading accounts --raw
 webull-auto-trading init-db
 webull-auto-trading serve --reload
 webull-auto-trading run
+webull-auto-trading cleanup --dry-run
 ```
 
 `serve` starts the local backend on <http://127.0.0.1:8765> by default. The frontend lives in
@@ -67,8 +69,8 @@ npm install
 npm run dev
 ```
 
-The first strategy instance config lives in `config/strategies.yml`. It is disabled by
-default and contains no secrets.
+Mode-specific strategy configs live in `config/strategies.test.yml` and
+`config/strategies.live.yml`. They are disabled by default and contain no secrets.
 
 ## Verification
 
@@ -77,6 +79,7 @@ Normal verification must not call Webull, InsightSentry, or place live orders:
 ```bash
 python -m pytest
 ruff check .
+cd frontend && npm run build
 ```
 
 For Webull behavior, use the current official documentation from

@@ -136,6 +136,12 @@ def main() -> None:
         help="Also print the redacted raw Webull account-list response",
     )
     commands.add_parser("init-db", help="Create or migrate the local runtime SQLite database")
+    cleanup = commands.add_parser("cleanup", help="Clean retained local runtime storage")
+    cleanup.add_argument("--dry-run", action="store_true", help="Report rows that would be deleted")
+    cleanup.add_argument("--activity-days", type=int, default=30)
+    cleanup.add_argument("--paper-history-days", type=int, default=365)
+    cleanup.add_argument("--closed-cycle-days", type=int, default=365)
+    cleanup.add_argument("--vacuum", action="store_true")
     serve = commands.add_parser("serve", help="Run the local FastAPI backend")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
@@ -154,6 +160,19 @@ def main() -> None:
         settings = get_settings()
         RuntimeRepository(settings.runtime_db_path).init_db()
         print_json({"ok": True, "database": str(settings.runtime_db_path)})
+    elif args.command == "cleanup":
+        settings = get_settings()
+        repo = RuntimeRepository(settings.runtime_db_path)
+        repo.init_db()
+        print_json(
+            repo.cleanup(
+                dry_run=args.dry_run,
+                activity_days=args.activity_days,
+                paper_history_days=args.paper_history_days,
+                closed_cycle_days=args.closed_cycle_days,
+                vacuum=args.vacuum,
+            )
+        )
     elif args.command == "serve":
         try:
             import uvicorn
