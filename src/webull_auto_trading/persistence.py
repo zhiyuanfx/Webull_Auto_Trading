@@ -762,9 +762,17 @@ class RuntimeRepository:
             self.upsert_strategy_instance(instance)
 
     def replace_strategy_instances(self, instances: Iterable[StrategyInstance]) -> None:
+        existing = {item.id: item for item in self.list_strategy_instances()}
+        prepared: list[StrategyInstance] = []
+        for instance in instances:
+            current = existing.get(instance.id)
+            if current is not None:
+                instance.enabled = current.enabled
+                instance.created_at = current.created_at
+            prepared.append(instance)
         with self.connect() as conn:
             conn.execute("DELETE FROM strategy_instances")
-        self.seed_strategy_instances(instances)
+        self.seed_strategy_instances(prepared)
 
     def _sync_cycles(self, conn: sqlite3.Connection, orders: list[PaperOrder]) -> None:
         by_cycle: dict[str, list[PaperOrder]] = {}

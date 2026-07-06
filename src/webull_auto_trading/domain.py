@@ -48,6 +48,7 @@ class IntentType(StrEnum):
     MOVE_STOP = "MoveStop"
     OPEN_ADD_ON = "OpenAddOn"
     CLOSE_CYCLE = "CloseCycle"
+    FLATTEN_PAPER_POSITION = "FlattenPaperPosition"
     LOCK_INSTANCE = "LockInstance"
     LOCK_GLOBAL = "LockGlobal"
 

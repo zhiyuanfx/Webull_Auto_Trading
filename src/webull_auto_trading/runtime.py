@@ -89,6 +89,91 @@ class RuntimeService:
         )
         return {"global_pause": paused}
 
+    def set_strategy_enabled(self, strategy_id: str, enabled: bool) -> dict[str, Any]:
+        instance = self.repository.update_strategy_instance(strategy_id, {"enabled": enabled})
+        self.repository.log_activity(
+            "UnlockInstance" if enabled else "LockInstance",
+            f"Strategy {strategy_id} {'resumed' if enabled else 'paused'}",
+            strategy_instance_id=instance.id,
+            symbol=instance.symbol,
+        )
+        return asdict(instance)
+
+    def flatten_strategy(self, strategy_id: str) -> dict[str, Any]:
+        if self.active_mode() == RuntimeMode.LIVE:
+            raise PermissionError("Flatten is paper-only; live execution is disabled")
+        instance = self.repository.update_strategy_instance(strategy_id, {"enabled": False})
+        result = self.order_book.flatten_instance(
+            strategy_id,
+            quotes=self.current_quotes(),
+        )
+        self.repository.sync_paper_state(
+            self.order_book.orders,
+            self.order_book.fills,
+            market_prices=self.current_market_prices(),
+        )
+        summary = {
+            "strategy_id": strategy_id,
+            "global_pause": self.risk.global_pause,
+            "paused_strategy_count": 1,
+            "cancelled_pending": result.cancelled_pending,
+            "closed_positions": result.closed_positions,
+            "warnings": result.warnings,
+        }
+        self.repository.log_activity(
+            "FlattenInstance",
+            self._flatten_message(summary),
+            level="warning" if result.warnings else "info",
+            strategy_instance_id=instance.id,
+            symbol=instance.symbol,
+            payload=summary,
+        )
+        return summary
+
+    def flatten_all_strategies(self) -> dict[str, Any]:
+        if self.active_mode() == RuntimeMode.LIVE:
+            raise PermissionError("Flatten is paper-only; live execution is disabled")
+        self.set_global_pause(True)
+        instances = self.repository.list_strategy_instances()
+        quotes = self.current_quotes()
+        cancelled_pending = 0
+        closed_positions = 0
+        warnings: list[str] = []
+        for instance in instances:
+            result = self.order_book.flatten_instance(instance.id, quotes=quotes)
+            cancelled_pending += result.cancelled_pending
+            closed_positions += result.closed_positions
+            warnings.extend(result.warnings)
+        self.repository.sync_paper_state(
+            self.order_book.orders,
+            self.order_book.fills,
+            market_prices=self.current_market_prices(),
+        )
+        summary = {
+            "strategy_id": None,
+            "global_pause": self.risk.global_pause,
+            "paused_strategy_count": len(instances),
+            "cancelled_pending": cancelled_pending,
+            "closed_positions": closed_positions,
+            "warnings": warnings,
+        }
+        self.repository.log_activity(
+            "FlattenGlobal",
+            self._flatten_message(summary),
+            level="warning" if warnings else "info",
+            payload=summary,
+        )
+        return summary
+
+    def _flatten_message(self, summary: dict[str, Any]) -> str:
+        message = (
+            f"Flattened paper state: cancelled {summary['cancelled_pending']} pending orders, "
+            f"closed {summary['closed_positions']} positions"
+        )
+        if summary["warnings"]:
+            message += f"; {len(summary['warnings'])} warnings"
+        return message
+
     def ingest_quote_item(self, item: dict[str, Any]) -> list[str]:
         quote = self.quote_book.merge_quote_item(item)
         self.record_stream_message(quote.symbol, "quote", item)
@@ -108,14 +193,26 @@ class RuntimeService:
         return []
 
     def record_stream_message(self, symbol: str, message_type: str, raw: dict[str, Any]) -> None:
-        for instance in self.repository.list_strategy_instances():
-            if instance.enabled and instance.symbol == symbol:
-                self.stream_buffer.append(
-                    strategy_instance_id=instance.id,
-                    symbol=symbol,
-                    message_type=message_type,
-                    raw=raw,
-                )
+        if not symbol:
+            return
+        enabled_instances = [
+            instance
+            for instance in self.repository.list_strategy_instances()
+            if instance.enabled and instance.symbol == symbol
+        ]
+        if enabled_instances:
+            self.stream_buffer.append_symbol(
+                symbol=symbol,
+                message_type=message_type,
+                raw=raw,
+            )
+        for instance in enabled_instances:
+            self.stream_buffer.append(
+                strategy_instance_id=instance.id,
+                symbol=symbol,
+                message_type=message_type,
+                raw=raw,
+            )
 
     def evaluate_quote(self, quote: QuoteState) -> list[str]:
         validation = validate_quote(
@@ -175,6 +272,23 @@ class RuntimeService:
             if price is not None:
                 prices[quote.symbol] = price
         return prices
+
+    def current_quotes(self) -> dict[str, QuoteState]:
+        return {quote.symbol: quote for quote in self.quote_book.all()}
+
+    def enabled_symbol_streams(self) -> list[dict[str, Any]]:
+        symbols: dict[str, list[str]] = {}
+        for instance in self.repository.list_strategy_instances():
+            if instance.enabled:
+                symbols.setdefault(instance.symbol, []).append(instance.id)
+        return [
+            {
+                "symbol": symbol,
+                "strategy_ids": strategy_ids,
+                "strategy_count": len(strategy_ids),
+            }
+            for symbol, strategy_ids in sorted(symbols.items())
+        ]
 
     def snapshot(self) -> dict[str, Any]:
         return {

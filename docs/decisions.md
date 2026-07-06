@@ -28,6 +28,12 @@ Strategy instances are configured from `config/strategies.test.yml` or
 changes are made in source/config, not through the UI. The local API supports runtime
 pause/resume controls for configured instances.
 
+Operator pause state is persistent. Config `enabled` seeds a new strategy ID, while the
+SQLite strategy setting remains authoritative for an existing ID. Global and per-strategy
+flatten controls are paper-only: they pause execution, cancel virtual pending orders, and
+close paper positions only when an in-memory current quote provides the documented paper
+close side. Live mode rejects flatten because live execution is disabled.
+
 The first ported strategy is `day_many_bian`, modeled as a Python state machine with daily
 brackets, reverse-buffer entries after the first cycle, trailing stop updates, optional
 pyramiding, cooldown, max-cycle, and daily-loss controls.

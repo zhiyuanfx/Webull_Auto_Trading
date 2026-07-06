@@ -74,6 +74,15 @@ type StreamMessage = {
   raw: Record<string, unknown>;
 };
 
+type FlattenSummary = {
+  strategy_id?: string | null;
+  global_pause: boolean;
+  paused_strategy_count: number;
+  cancelled_pending: number;
+  closed_positions: number;
+  warnings: string[];
+};
+
 const dictionary = {
   en: {
     account: "Account",
@@ -128,13 +137,24 @@ const dictionary = {
     clear: "Clear",
     configured: "Configured",
     controls: "Controls",
+    cancelledPending: "Cancelled pending",
+    closedPositions: "Closed positions",
     dashboard: "Dashboard",
     dark: "Dark",
     deposit: "Deposit",
     dryRun: "Dry run",
     enabled: "Enabled",
+    flatten: "Flatten",
+    flattenFailedNoQuote: "Flatten failed: no quote",
+    flattening: "Flattening...",
+    globalFlatten: "Global Flatten",
+    globalPause: "Global Pause",
+    globalPauseStatus: "Global pause",
+    globalResume: "Global Resume",
+    warnings: "Warnings",
     live: "Live",
     liveSafety: "Live mode: Webull reads enabled, live execution disabled",
+    liveFlattenDisabled: "Live execution disabled",
     market: "Market Data",
     lastUpdated: "Last updated",
     noActivity: "No activity",
@@ -143,6 +163,7 @@ const dictionary = {
     noRows: "No rows",
     orders: "Orders",
     pause: "Pause",
+    pausing: "Pausing...",
     paused: "Paused",
     paperAccount: "Paper account",
     recentIssues: "Recent Issues",
@@ -150,7 +171,10 @@ const dictionary = {
     refreshWebull: "Refresh Webull Reads",
     reset: "Reset",
     resume: "Resume",
+    resuming: "Resuming...",
     cleanup: "Cleanup",
+    requestFailed: "Request failed",
+    runningWaitingForMarketData: "Running, waiting for market data",
     runningStrategy: "Running strategy",
     service: "Service",
     status: "Status",
@@ -161,6 +185,7 @@ const dictionary = {
     testSafety: "Test mode: paper trading with real InsightSentry market data",
     themeLight: "Light",
     unknown: "Unknown",
+    waitingForMarketData: "Waiting for market data...",
     webull: "Webull"
   },
   zh: {
@@ -216,13 +241,24 @@ const dictionary = {
     clear: "清除",
     configured: "已配置",
     controls: "控制",
+    cancelledPending: "已取消挂单",
+    closedPositions: "已平仓持仓",
     dashboard: "仪表盘",
     dark: "深色",
     deposit: "入金",
     dryRun: "试运行",
     enabled: "启用",
+    flatten: "平仓",
+    flattenFailedNoQuote: "平仓失败：无报价",
+    flattening: "平仓中...",
+    globalFlatten: "全局平仓",
+    globalPause: "全局暂停",
+    globalPauseStatus: "全局暂停",
+    globalResume: "全局恢复",
+    warnings: "警告",
     live: "实盘",
     liveSafety: "实盘模式：允许 Webull 读取，禁止实盘执行",
+    liveFlattenDisabled: "实盘执行已禁用",
     market: "市场数据",
     lastUpdated: "上次刷新",
     noActivity: "暂无活动",
@@ -231,6 +267,7 @@ const dictionary = {
     noRows: "暂无数据",
     orders: "订单",
     pause: "暂停",
+    pausing: "暂停中...",
     paused: "暂停",
     paperAccount: "纸面账户",
     recentIssues: "近期问题",
@@ -238,7 +275,10 @@ const dictionary = {
     refreshWebull: "刷新 Webull 读取",
     reset: "重置",
     resume: "恢复",
+    resuming: "恢复中...",
     cleanup: "清理",
+    requestFailed: "请求失败",
+    runningWaitingForMarketData: "运行中，等待市场数据",
     runningStrategy: "运行策略",
     service: "服务",
     status: "状态",
@@ -249,6 +289,7 @@ const dictionary = {
     testSafety: "测试模式：使用真实 InsightSentry 行情进行纸面交易",
     themeLight: "浅色",
     unknown: "未知",
+    waitingForMarketData: "等待市场数据...",
     webull: "Webull"
   }
 };
@@ -333,9 +374,9 @@ function App() {
   const activeContent = useMemo(() => {
     switch (tab) {
       case "strategies":
-        return <Strategies strategies={strategies} onChanged={refresh} t={t} />;
+        return <Strategies health={health} strategies={strategies} onChanged={refresh} t={t} />;
       case "market":
-        return <Market t={t} />;
+        return <Market strategies={strategies} t={t} />;
       case "orders":
         return <Orders orders={orders} cycles={cycles} t={t} />;
       case "account":
@@ -348,9 +389,7 @@ function App() {
         return (
           <Dashboard
             health={health}
-            strategies={strategies}
             activity={activity}
-            onChanged={refresh}
             t={t}
           />
         );
@@ -451,48 +490,19 @@ function Segmented({
 
 function Dashboard({
   health,
-  strategies,
   activity,
-  onChanged,
   t
 }: {
   health: Health | null;
-  strategies: StrategyInstance[];
   activity: ActivityRow[];
-  onChanged: () => Promise<void>;
   t: typeof dictionary.en;
 }) {
-  async function setPause(paused: boolean) {
-    await fetch("/api/settings/global-pause", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ paused })
-    });
-    await onChanged();
-  }
   return (
     <div className="grid">
       <Metric label={t.service} value={health?.ok ? "Online" : t.unknown} tone="green" />
       <Metric label={t.activeEas} value={health?.active_strategy_count ?? 0} tone="blue" />
       <Metric label={t.market} value={health?.quote_count ?? 0} tone="gold" />
       <Metric label={t.webull} value={health?.webull_configured ? t.configured : "Off"} tone="red" />
-      <section className="panel wide">
-        <div className="panelHeader">
-          <h2>{t.controls}</h2>
-          <button
-            className={health?.global_pause ? "dangerButton" : "primaryButton"}
-            onClick={() => void setPause(!health?.global_pause)}
-          >
-            {health?.global_pause ? <Play size={16} /> : <CirclePause size={16} />}
-            <span>{health?.global_pause ? t.resume : t.pause}</span>
-          </button>
-        </div>
-        <div className="statusStrip">
-          <span>{strategies.length} {t.strategies}</span>
-          <span>{activity.length} {t.activity}</span>
-          <span>{health?.database ?? ""}</span>
-        </div>
-      </section>
       <section className="panel wide">
         <h2>{t.recentIssues}</h2>
         <Table
@@ -516,32 +526,185 @@ function Metric({ label, value, tone }: { label: string; value: React.ReactNode;
 }
 
 function Strategies({
+  health,
   strategies,
   onChanged,
   t
 }: {
+  health: Health | null;
   strategies: StrategyInstance[];
   onChanged: () => Promise<void>;
   t: typeof dictionary.en;
 }) {
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [rowStatus, setRowStatus] = useState<Record<string, string>>({});
+  const liveMode = health?.mode === "live";
+
   async function toggle(strategy: StrategyInstance) {
-    await fetch(`/api/strategies/${strategy.id}`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enabled: !strategy.enabled })
-    });
-    await onChanged();
+    const nextEnabled = !strategy.enabled;
+    const actionId = `${nextEnabled ? "resume" : "pause"}:${strategy.id}`;
+    setPendingAction(actionId);
+    setStatusMessage("");
+    setRowStatus((current) => ({
+      ...current,
+      [strategy.id]: nextEnabled ? t.resuming : t.pausing
+    }));
+    try {
+      const response = await fetch(`/api/strategies/${strategy.id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: nextEnabled })
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response, t.requestFailed));
+      }
+      setRowStatus((current) => {
+        const next = { ...current };
+        delete next[strategy.id];
+        return next;
+      });
+      await onChanged();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t.requestFailed;
+      setStatusMessage(message);
+      setRowStatus((current) => ({
+        ...current,
+        [strategy.id]: `${nextEnabled ? t.resume : t.pause} ${t.requestFailed}`
+      }));
+    } finally {
+      setPendingAction(null);
+    }
   }
+
+  async function setGlobalPause(paused: boolean) {
+    const actionId = paused ? "global-pause" : "global-resume";
+    setPendingAction(actionId);
+    setStatusMessage("");
+    try {
+      const response = await fetch("/api/settings/global-pause", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ paused })
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response, t.requestFailed));
+      }
+      await onChanged();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : t.requestFailed);
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function flatten(strategy?: StrategyInstance) {
+    if (liveMode) {
+      setStatusMessage(t.liveFlattenDisabled);
+      return;
+    }
+    const actionId = strategy ? `flatten:${strategy.id}` : "global-flatten";
+    setPendingAction(actionId);
+    setStatusMessage("");
+    if (strategy) {
+      setRowStatus((current) => ({ ...current, [strategy.id]: t.flattening }));
+    }
+    try {
+      const response = await fetch(
+        strategy ? `/api/strategies/${strategy.id}/flatten` : "/api/strategies/flatten",
+        { method: "POST" }
+      );
+      if (!response.ok) {
+        throw new Error(await responseError(response, t.requestFailed));
+      }
+      const summary = (await response.json()) as FlattenSummary;
+      const message = flattenSummaryMessage(summary, t);
+      setStatusMessage(message);
+      if (strategy) {
+        setRowStatus((current) => ({
+          ...current,
+          [strategy.id]: summary.warnings.length ? t.flattenFailedNoQuote : t.paused
+        }));
+      }
+      await onChanged();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t.requestFailed;
+      setStatusMessage(message);
+      if (strategy) {
+        setRowStatus((current) => ({ ...current, [strategy.id]: message }));
+      }
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  function statusFor(strategy: StrategyInstance) {
+    if (rowStatus[strategy.id]) return rowStatus[strategy.id];
+    if (pendingAction === "global-pause" && strategy.enabled) return t.pausing;
+    if (pendingAction === "global-resume" && strategy.enabled) return t.resuming;
+    if (!strategy.enabled) return t.paused;
+    if (health?.global_pause) return t.globalPauseStatus;
+    return t.runningWaitingForMarketData;
+  }
+
+  function actionLabel(strategy: StrategyInstance) {
+    if (pendingAction === `pause:${strategy.id}`) return t.pausing;
+    if (pendingAction === `resume:${strategy.id}`) return t.resuming;
+    return strategy.enabled ? t.pause : t.resume;
+  }
+
   return (
     <div className="stack">
+      <section className="toolbar strategyToolbar">
+        <button
+          className={health?.global_pause ? "primaryButton" : "dangerButton"}
+          disabled={pendingAction !== null}
+          onClick={() => void setGlobalPause(!health?.global_pause)}
+        >
+          {health?.global_pause ? <Play size={16} /> : <CirclePause size={16} />}
+          <span>
+            {pendingAction === "global-pause"
+              ? t.pausing
+              : pendingAction === "global-resume"
+                ? t.resuming
+                : health?.global_pause
+                  ? t.globalResume
+                  : t.globalPause}
+          </span>
+        </button>
+        <button
+          className="dangerButton"
+          disabled={pendingAction !== null || liveMode}
+          onClick={() => void flatten()}
+          title={liveMode ? t.liveFlattenDisabled : t.globalFlatten}
+        >
+          {pendingAction === "global-flatten" ? t.flattening : t.globalFlatten}
+        </button>
+        {liveMode && <span className="muted">{t.liveFlattenDisabled}</span>}
+        {statusMessage && <span className="statusMessage">{statusMessage}</span>}
+      </section>
       <Table
         rows={strategies.map((strategy) => ({
           ...strategy,
-          status: strategy.enabled ? t.enabled : t.paused,
+          status: statusFor(strategy),
           action: (
-            <button className="smallButton" onClick={() => void toggle(strategy)}>
-              {strategy.enabled ? t.pause : t.resume}
-            </button>
+            <div className="rowActions">
+              <button
+                className="smallButton"
+                disabled={pendingAction !== null}
+                onClick={() => void toggle(strategy)}
+              >
+                {actionLabel(strategy)}
+              </button>
+              <button
+                className="dangerButton"
+                disabled={pendingAction !== null || liveMode}
+                onClick={() => void flatten(strategy)}
+                title={liveMode ? t.liveFlattenDisabled : t.flatten}
+              >
+                {pendingAction === `flatten:${strategy.id}` ? t.flattening : t.flatten}
+              </button>
+            </div>
           )
         }))}
         columns={["symbol", "strategy_name", "status", "action"]}
@@ -552,25 +715,26 @@ function Strategies({
   );
 }
 
-function Market({ t }: { t: typeof dictionary.en }) {
-  const [strategies, setStrategies] = useState<StrategyInstance[]>([]);
+function Market({ strategies, t }: { strategies: StrategyInstance[]; t: typeof dictionary.en }) {
+  const symbols = useMemo(() => {
+    const unique = new Set<string>();
+    strategies.forEach((strategy) => {
+      if (strategy.enabled) {
+        unique.add(strategy.symbol);
+      }
+    });
+    return [...unique].sort();
+  }, [strategies]);
   const [selected, setSelected] = useState("");
   const [cursor, setCursor] = useState(0);
   const [messages, setMessages] = useState<StreamMessage[]>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  async function loadStrategies() {
-    const response = await fetch("/api/market/streams/strategies");
-    const rows = await response.json();
-    setStrategies(rows);
-    if (!selected && rows[0]) {
-      setSelected(rows[0].id);
-    }
-  }
-
-  async function poll(strategyId = selected, since = cursor) {
-    if (!strategyId) return;
-    const response = await fetch(`/api/market/streams/${strategyId}?since=${since}`);
+  async function poll(symbol = selected, since = cursor) {
+    if (!symbol) return;
+    const response = await fetch(
+      `/api/market/streams/by-symbol?symbol=${encodeURIComponent(symbol)}&since=${since}`
+    );
     const rows: StreamMessage[] = await response.json();
     if (rows.length) {
       setMessages((current) => [...current, ...rows].slice(-20));
@@ -578,24 +742,38 @@ function Market({ t }: { t: typeof dictionary.en }) {
     }
   }
 
-  async function switchStrategy(strategyId: string) {
-    setSelected(strategyId);
+  async function switchSymbol(symbol: string) {
+    setSelected(symbol);
     setMessages([]);
-    const response = await fetch(`/api/market/streams/${strategyId}`);
+    const response = await fetch(
+      `/api/market/streams/by-symbol?symbol=${encodeURIComponent(symbol)}`
+    );
     const existing: StreamMessage[] = await response.json();
     setCursor(existing.length ? existing[existing.length - 1].sequence : 0);
   }
 
   async function clearVisible() {
     setMessages([]);
-    const response = await fetch(`/api/market/streams/${selected}`);
+    const response = await fetch(
+      `/api/market/streams/by-symbol?symbol=${encodeURIComponent(selected)}`
+    );
     const existing: StreamMessage[] = await response.json();
     setCursor(existing.length ? existing[existing.length - 1].sequence : cursor);
   }
 
   useEffect(() => {
-    void loadStrategies();
-  }, []);
+    if (!symbols.length) {
+      setSelected("");
+      setMessages([]);
+      setCursor(0);
+      return;
+    }
+    if (!selected || !symbols.includes(selected)) {
+      setSelected(symbols[0]);
+      setMessages([]);
+      setCursor(0);
+    }
+  }, [selected, symbols]);
 
   useEffect(() => {
     void poll();
@@ -612,21 +790,21 @@ function Market({ t }: { t: typeof dictionary.en }) {
       <section className="toolbar">
         <label className="fieldLabel">
           <span>{t.columnHeaders.symbol}</span>
-          <select value={selected} onChange={(event) => void switchStrategy(event.target.value)}>
-            {strategies.map((strategy) => (
-              <option key={strategy.id} value={strategy.id}>
-                {strategy.symbol} / {strategy.id}
+          <select value={selected} onChange={(event) => void switchSymbol(event.target.value)}>
+            {symbols.map((symbol) => (
+              <option key={symbol} value={symbol}>
+                {symbol}
               </option>
             ))}
           </select>
         </label>
-        <button className="smallButton" onClick={() => void clearVisible()}>
+        <button className="smallButton" disabled={!selected} onClick={() => void clearVisible()}>
           {t.clear}
         </button>
       </section>
       <section className="panel streamPanel" ref={scrollRef}>
         {messages.length === 0 ? (
-          <div className="empty">{t.noMessages}</div>
+          <div className="empty">{selected ? t.waitingForMarketData : t.noMessages}</div>
         ) : (
           messages.map((message) => (
             <pre key={message.sequence}>
@@ -804,6 +982,27 @@ function Table({
       )}
     </section>
   );
+}
+
+async function responseError(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = await response.json();
+    if (typeof payload.detail === "string") return payload.detail;
+  } catch {
+    // Keep the user-facing fallback when the backend returns a non-JSON error.
+  }
+  return fallback;
+}
+
+function flattenSummaryMessage(summary: FlattenSummary, t: typeof dictionary.en): string {
+  const parts = [
+    `${t.cancelledPending}: ${summary.cancelled_pending}`,
+    `${t.closedPositions}: ${summary.closed_positions}`
+  ];
+  if (summary.warnings.length) {
+    parts.push(`${t.warnings}: ${summary.warnings.join("; ")}`);
+  }
+  return parts.join(" · ");
 }
 
 function renderCell(value: unknown): React.ReactNode {

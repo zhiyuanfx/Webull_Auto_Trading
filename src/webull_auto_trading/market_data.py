@@ -87,6 +87,9 @@ class MarketStreamBuffer:
         self._messages: dict[str, deque[MarketStreamMessage]] = defaultdict(
             lambda: deque(maxlen=max_messages)
         )
+        self._symbol_messages: dict[str, deque[MarketStreamMessage]] = defaultdict(
+            lambda: deque(maxlen=max_messages)
+        )
 
     def append(
         self,
@@ -108,6 +111,25 @@ class MarketStreamBuffer:
         self._messages[strategy_instance_id].append(message)
         return message
 
+    def append_symbol(
+        self,
+        *,
+        symbol: str,
+        message_type: str,
+        raw: dict[str, Any],
+        timestamp: datetime | None = None,
+    ) -> MarketStreamMessage:
+        message = MarketStreamMessage(
+            sequence=next(self._sequence),
+            timestamp=timestamp or utc_now(),
+            strategy_instance_id="",
+            symbol=symbol,
+            type=message_type,
+            raw=raw,
+        )
+        self._symbol_messages[symbol].append(message)
+        return message
+
     def list_for_strategy(
         self,
         strategy_instance_id: str,
@@ -115,6 +137,17 @@ class MarketStreamBuffer:
         since: int | None = None,
     ) -> list[MarketStreamMessage]:
         messages = list(self._messages.get(strategy_instance_id, ()))
+        if since is None:
+            return messages
+        return [message for message in messages if message.sequence > since]
+
+    def list_for_symbol(
+        self,
+        symbol: str,
+        *,
+        since: int | None = None,
+    ) -> list[MarketStreamMessage]:
+        messages = list(self._symbol_messages.get(symbol, ()))
         if since is None:
             return messages
         return [message for message in messages if message.sequence > since]

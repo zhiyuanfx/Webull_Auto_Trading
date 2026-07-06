@@ -80,13 +80,25 @@ def create_app() -> FastAPI:
     @app.put("/api/strategies/{strategy_id}")
     def update_strategy(strategy_id: str, payload: StrategyUpdatePayload) -> dict[str, Any]:
         try:
-            instance = get_runtime().repository.update_strategy_instance(
-                strategy_id,
-                {"enabled": payload.enabled},
-            )
+            return get_runtime().set_strategy_enabled(strategy_id, payload.enabled)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="strategy not found") from exc
-        return asdict(instance)
+
+    @app.post("/api/strategies/flatten")
+    def flatten_all_strategies() -> dict[str, Any]:
+        try:
+            return get_runtime().flatten_all_strategies()
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/strategies/{strategy_id}/flatten")
+    def flatten_strategy(strategy_id: str) -> dict[str, Any]:
+        try:
+            return get_runtime().flatten_strategy(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="strategy not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/market/streams/strategies")
     def list_stream_strategies() -> list[dict[str, Any]]:
@@ -99,6 +111,17 @@ def create_app() -> FastAPI:
             }
             for item in get_runtime().repository.list_strategy_instances()
             if item.enabled
+        ]
+
+    @app.get("/api/market/streams/symbols")
+    def list_stream_symbols() -> list[dict[str, Any]]:
+        return get_runtime().enabled_symbol_streams()
+
+    @app.get("/api/market/streams/by-symbol")
+    def list_market_stream_by_symbol(symbol: str, since: int | None = None) -> list[dict[str, Any]]:
+        return [
+            asdict(item)
+            for item in get_runtime().stream_buffer.list_for_symbol(symbol, since=since)
         ]
 
     @app.get("/api/market/streams/{strategy_id}")

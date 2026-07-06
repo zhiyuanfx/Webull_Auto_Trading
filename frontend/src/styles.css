@@ -349,6 +349,7 @@ select {
 .smallButton {
   min-height: 36px;
   padding: 0 12px;
+  transition: background 120ms ease, border-color 120ms ease, filter 120ms ease;
 }
 
 .primaryButton {
@@ -366,10 +367,63 @@ select {
   color: inherit;
 }
 
+.primaryButton:hover,
+.primaryButton:focus-visible {
+  background: #185744;
+  outline: 0;
+}
+
+.dangerButton:hover,
+.dangerButton:focus-visible {
+  background: #922f2d;
+  outline: 0;
+}
+
+.smallButton:hover,
+.smallButton:focus-visible {
+  border-color: #aeb9c8;
+  background: #dce4ef;
+  outline: 0;
+}
+
+.primaryButton:disabled,
+.dangerButton:disabled,
+.smallButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .dark .iconButton,
 .dark .iconText,
 .dark .smallButton {
   background: #31352d;
+}
+
+.dark .smallButton:hover,
+.dark .smallButton:focus-visible {
+  border-color: #586153;
+  background: #3b4037;
+}
+
+.strategyToolbar {
+  justify-content: flex-start;
+}
+
+.rowActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.statusMessage {
+  color: #5a5f56;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.dark .statusMessage {
+  color: #b5b9ad;
 }
 
 .tablePanel {

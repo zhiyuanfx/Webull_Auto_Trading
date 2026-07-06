@@ -47,6 +47,42 @@ def test_runtime_mode_and_paper_account_persist(tmp_path) -> None:
     assert restarted.get_active_paper_account().starting_balance == 10_250
 
 
+def test_replace_strategy_instances_preserves_operator_pause(tmp_path) -> None:
+    db_path = tmp_path / "runtime.sqlite3"
+    repo = RuntimeRepository(db_path)
+    repo.init_db()
+    repo.upsert_strategy_instance(
+        StrategyInstance(
+            id="st-1",
+            strategy_name="day_many_bian",
+            symbol="NASDAQ:AAPL",
+            enabled=False,
+        )
+    )
+
+    repo.replace_strategy_instances(
+        [
+            StrategyInstance(
+                id="st-1",
+                strategy_name="day_many_bian",
+                symbol="NASDAQ:AAPL",
+                enabled=True,
+            ),
+            StrategyInstance(
+                id="st-2",
+                strategy_name="day_many_bian",
+                symbol="NASDAQ:MSFT",
+                enabled=True,
+            ),
+        ]
+    )
+
+    instances = {item.id: item for item in repo.list_strategy_instances()}
+
+    assert instances["st-1"].enabled is False
+    assert instances["st-2"].enabled is True
+
+
 def test_paper_orders_fills_and_positions_restore(tmp_path) -> None:
     db_path = tmp_path / "runtime.sqlite3"
     repo = RuntimeRepository(db_path)

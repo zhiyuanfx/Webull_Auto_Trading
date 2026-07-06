@@ -16,6 +16,13 @@ from webull_auto_trading.domain import (
 
 
 @dataclass(slots=True)
+class FlattenResult:
+    cancelled_pending: int = 0
+    closed_positions: int = 0
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class PaperOrderBook:
     orders: list[PaperOrder] = field(default_factory=list)
     fills: list[PaperFill] = field(default_factory=list)
@@ -77,6 +84,31 @@ class PaperOrderBook:
             order.metadata["intent"] = IntentType.CANCEL_VIRTUAL_ORDER.value
             count += 1
         return count
+
+    def flatten_instance(
+        self,
+        strategy_instance_id: str,
+        *,
+        quotes: dict[str, QuoteState],
+    ) -> FlattenResult:
+        result = FlattenResult(cancelled_pending=self.cancel_pending(strategy_instance_id))
+        for order in self.open_for_instance(strategy_instance_id):
+            quote = quotes.get(order.symbol)
+            close_price = None
+            if quote is not None:
+                close_price = quote.bid if order.side == OrderSide.BUY else quote.ask
+            if close_price is None:
+                result.warnings.append(
+                    f"Cannot flatten {order.symbol}: no current quote available"
+                )
+                continue
+            order.status = OrderStatus.CLOSED
+            order.closed_at = utc_now()
+            order.metadata["intent"] = IntentType.FLATTEN_PAPER_POSITION.value
+            order.metadata["close_reason"] = "flatten"
+            order.metadata["close_price"] = close_price
+            result.closed_positions += 1
+        return result
 
     def apply_quote(self, quote: QuoteState) -> list[PaperFill]:
         fills: list[PaperFill] = []

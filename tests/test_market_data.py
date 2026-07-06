@@ -99,3 +99,26 @@ def test_market_stream_buffer_keeps_latest_twenty_messages() -> None:
     assert len(messages) == 20
     assert messages[0].raw["sequence"] == 5
     assert buffer.list_for_strategy("st-1", since=24)[0].sequence == 25
+
+
+def test_market_stream_buffer_tracks_symbol_messages_once() -> None:
+    buffer = MarketStreamBuffer(max_messages=20)
+
+    buffer.append_symbol(symbol="NASDAQ:AAPL", message_type="quote", raw={"bid": 100})
+    buffer.append(
+        strategy_instance_id="st-1",
+        symbol="NASDAQ:AAPL",
+        message_type="quote",
+        raw={"bid": 100},
+    )
+    buffer.append(
+        strategy_instance_id="st-2",
+        symbol="NASDAQ:AAPL",
+        message_type="quote",
+        raw={"bid": 100},
+    )
+
+    symbol_messages = buffer.list_for_symbol("NASDAQ:AAPL")
+
+    assert len(symbol_messages) == 1
+    assert symbol_messages[0].strategy_instance_id == ""
