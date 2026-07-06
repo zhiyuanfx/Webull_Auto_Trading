@@ -38,6 +38,10 @@ The first ported strategy is `day_many_bian`, modeled as a Python state machine 
 brackets, reverse-buffer entries after the first cycle, trailing stop updates, optional
 pyramiding, cooldown, max-cycle, and daily-loss controls.
 
+Test mode also includes `recycle_buy`, a deliberately small paper-only helper EA that opens
+an immediate BUY on each valid quote, attaches fixed stop-loss/take-profit distances, and
+waits for a configured cooldown after the position closes before opening again.
+
 ## Secret and credential handling
 
 Personal Webull credentials live in gitignored `.env` and SDK tokens live under ignored

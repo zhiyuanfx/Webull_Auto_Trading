@@ -16,6 +16,7 @@ from webull_auto_trading.order_manager import PaperOrderBook
 from webull_auto_trading.persistence import RuntimeRepository
 from webull_auto_trading.risk import RiskController
 from webull_auto_trading.strategy.day_many_bian import DayManyBianStrategy
+from webull_auto_trading.strategy.recycle_buy import RecycleBuyStrategy
 
 
 class RuntimeService:
@@ -26,7 +27,10 @@ class RuntimeService:
         self.stream_buffer = MarketStreamBuffer(max_messages=20)
         self.order_book = PaperOrderBook()
         self.risk = RiskController()
-        self.strategies = {"day_many_bian": DayManyBianStrategy()}
+        self.strategies = {
+            "day_many_bian": DayManyBianStrategy(),
+            "recycle_buy": RecycleBuyStrategy(),
+        }
 
     def initialize(self, *, seed_config: bool = True) -> None:
         self.repository.init_db()

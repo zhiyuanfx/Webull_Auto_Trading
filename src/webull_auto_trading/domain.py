@@ -42,6 +42,7 @@ class OrderRole(StrEnum):
 
 
 class IntentType(StrEnum):
+    PLACE_MARKET_ORDER = "PlaceMarketOrder"
     PLACE_VIRTUAL_STOP = "PlaceVirtualStop"
     CANCEL_VIRTUAL_ORDER = "CancelVirtualOrder"
     PAPER_FILL = "PaperFill"

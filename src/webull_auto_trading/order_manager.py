@@ -74,6 +74,49 @@ class PaperOrderBook:
         self.orders.append(order)
         return order
 
+    def place_market_order(
+        self,
+        *,
+        strategy_instance_id: str,
+        cycle_id: str,
+        symbol: str,
+        side: OrderSide,
+        role: OrderRole,
+        quantity: float,
+        fill_price: float,
+        stop_loss: float,
+        take_profit: float,
+    ) -> PaperOrder:
+        order = PaperOrder(
+            id=new_id("ord"),
+            strategy_instance_id=strategy_instance_id,
+            cycle_id=cycle_id,
+            symbol=symbol,
+            side=side,
+            role=role,
+            quantity=quantity,
+            status=OrderStatus.FILLED,
+            fill_price=fill_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            opened_at=utc_now(),
+            metadata={"intent": IntentType.PLACE_MARKET_ORDER.value},
+        )
+        self.orders.append(order)
+        self.fills.append(
+            PaperFill(
+                id=new_id("fill"),
+                order_id=order.id,
+                strategy_instance_id=strategy_instance_id,
+                cycle_id=cycle_id,
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price=fill_price,
+            )
+        )
+        return order
+
     def cancel_pending(self, strategy_instance_id: str, *, side: OrderSide | None = None) -> int:
         count = 0
         for order in self.pending_for_instance(strategy_instance_id):

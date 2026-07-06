@@ -22,6 +22,7 @@
 - `src/webull_auto_trading/market_data.py`: InsightSentry quote merge, subscription, and
   rejection rules.
 - `src/webull_auto_trading/strategy/day_many_bian.py`: first Python EA-style strategy port.
+- `src/webull_auto_trading/strategy/recycle_buy.py`: simple Test-mode paper recycle-buy EA.
 - `src/webull_auto_trading/order_manager.py`: virtual pending orders and paper fills.
 - `src/webull_auto_trading/api.py`: local FastAPI API for the operator UI.
 - `frontend/`: local React/Vite operator console.
