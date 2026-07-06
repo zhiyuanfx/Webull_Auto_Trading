@@ -91,6 +91,7 @@ const dictionary = {
     live: "Live",
     liveSafety: "Live mode: Webull reads enabled, live execution disabled",
     market: "Market Data",
+    lastUpdated: "Last updated",
     noActivity: "No activity",
     noMessages: "No stream messages",
     noOrders: "No paper orders",
@@ -132,6 +133,7 @@ const dictionary = {
     live: "实盘",
     liveSafety: "实盘模式：允许 Webull 读取，禁止实盘执行",
     market: "市场数据",
+    lastUpdated: "上次刷新",
     noActivity: "暂无活动",
     noMessages: "暂无流消息",
     noOrders: "暂无纸面订单",
@@ -264,7 +266,7 @@ function App() {
   }, [tab, health, strategies, orders, cycles, account, activity, storage, t]);
 
   const refreshTitle = lastUpdatedAt
-    ? `${t.refresh}: ${lastUpdatedAt.toLocaleTimeString()}`
+    ? `${t.lastUpdated} ${lastUpdatedAt.toLocaleTimeString()}`
     : t.refresh;
 
   return (
@@ -319,9 +321,14 @@ function App() {
             <h1>{tabs.find((item) => item.id === tab)?.label}</h1>
             <p>{health?.mode_message ?? t.testSafety}</p>
           </div>
-          <button className="iconButton" onClick={() => void refresh()} title={refreshTitle}>
-            <RefreshCw size={18} className={refreshing ? "spin" : ""} />
-          </button>
+          <div className="refreshControl">
+            <button className="iconButton" onClick={() => void refresh()} aria-label={t.refresh}>
+              <RefreshCw size={18} className={refreshing ? "spin" : ""} />
+            </button>
+            <span className="refreshTooltip" role="status">
+              {refreshTitle}
+            </span>
+          </div>
         </header>
         {activeContent}
       </section>
