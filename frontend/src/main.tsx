@@ -7,11 +7,11 @@ import {
   CirclePause,
   Database,
   LayoutDashboard,
-  ListPlus,
   Moon,
   Play,
   RefreshCw,
   ShieldAlert,
+  Settings2,
   Sun,
   TerminalSquare
 } from "lucide-react";
@@ -79,14 +79,59 @@ const dictionary = {
     account: "Account",
     activeEas: "Active EAs",
     activity: "Activity",
-    add: "Add",
     appName: "Webull Auto Trading",
+    columnHeaders: {
+      action: "Action",
+      activity: "Activity",
+      amount: "Amount",
+      average_price: "Average price",
+      bars: "Bars",
+      cash_balance: "Cash balance",
+      client_order_id: "Client order ID",
+      closed_at: "Closed at",
+      combo_type: "Combo type",
+      created_at: "Created at",
+      current_equity: "Current equity",
+      cycles: "Cycles",
+      event_type: "Event type",
+      fill_price: "Fill price",
+      fills: "Fills",
+      last_price: "Last price",
+      level: "Level",
+      market_price: "Market price",
+      max_drawdown: "Max drawdown",
+      message: "Message",
+      opened_at: "Opened at",
+      open_orders: "Open orders",
+      orders: "Orders",
+      paper_account_events: "Paper account events",
+      peak_equity: "Peak equity",
+      quantity: "Quantity",
+      quote_snapshots: "Quote snapshots",
+      realized_pnl: "Realized P&L",
+      role: "Role",
+      side: "Side",
+      starting_balance: "Starting balance",
+      status: "Status",
+      stop_loss: "Stop loss",
+      stop_price: "Stop price",
+      strategy_name: "Strategy",
+      symbol: "Symbol",
+      total_asset_currency: "Total asset currency",
+      total_cash_balance: "Total cash balance",
+      total_day_profit_loss: "Day P&L",
+      total_net_liquidation_value: "Net liquidation value",
+      ts: "Time",
+      unrealized_pnl: "Unrealized P&L",
+      unrealized_profit_loss: "Unrealized P&L"
+    },
     clear: "Clear",
     configured: "Configured",
     controls: "Controls",
     dashboard: "Dashboard",
     dark: "Dark",
     deposit: "Deposit",
+    dryRun: "Dry run",
     enabled: "Enabled",
     live: "Live",
     liveSafety: "Live mode: Webull reads enabled, live execution disabled",
@@ -105,6 +150,7 @@ const dictionary = {
     refreshWebull: "Refresh Webull Reads",
     reset: "Reset",
     resume: "Resume",
+    cleanup: "Cleanup",
     runningStrategy: "Running strategy",
     service: "Service",
     status: "Status",
@@ -121,14 +167,59 @@ const dictionary = {
     account: "账户",
     activeEas: "运行策略",
     activity: "活动",
-    add: "添加",
     appName: "Webull 自动交易",
+    columnHeaders: {
+      action: "操作",
+      activity: "活动",
+      amount: "金额",
+      average_price: "平均价格",
+      bars: "K线",
+      cash_balance: "现金余额",
+      client_order_id: "客户订单ID",
+      closed_at: "关闭时间",
+      combo_type: "组合类型",
+      created_at: "创建时间",
+      current_equity: "当前权益",
+      cycles: "周期",
+      event_type: "事件类型",
+      fill_price: "成交价",
+      fills: "成交",
+      last_price: "最新价",
+      level: "级别",
+      market_price: "市场价格",
+      max_drawdown: "最大回撤",
+      message: "消息",
+      opened_at: "打开时间",
+      open_orders: "未结订单",
+      orders: "订单",
+      paper_account_events: "纸面账户事件",
+      peak_equity: "权益峰值",
+      quantity: "数量",
+      quote_snapshots: "报价快照",
+      realized_pnl: "已实现盈亏",
+      role: "角色",
+      side: "方向",
+      starting_balance: "初始余额",
+      status: "状态",
+      stop_loss: "止损",
+      stop_price: "止损触发价",
+      strategy_name: "策略",
+      symbol: "标的",
+      total_asset_currency: "资产币种",
+      total_cash_balance: "总现金余额",
+      total_day_profit_loss: "当日盈亏",
+      total_net_liquidation_value: "总净清算价值",
+      ts: "时间",
+      unrealized_pnl: "未实现盈亏",
+      unrealized_profit_loss: "未实现盈亏"
+    },
     clear: "清除",
     configured: "已配置",
     controls: "控制",
     dashboard: "仪表盘",
     dark: "深色",
     deposit: "入金",
+    dryRun: "试运行",
     enabled: "启用",
     live: "实盘",
     liveSafety: "实盘模式：允许 Webull 读取，禁止实盘执行",
@@ -147,6 +238,7 @@ const dictionary = {
     refreshWebull: "刷新 Webull 读取",
     reset: "重置",
     resume: "恢复",
+    cleanup: "清理",
     runningStrategy: "运行策略",
     service: "服务",
     status: "状态",
@@ -179,7 +271,7 @@ function App() {
   const tabs = useMemo(
     () => [
       { id: "dashboard" as const, label: t.dashboard, icon: LayoutDashboard },
-      { id: "strategies" as const, label: t.strategies, icon: ListPlus },
+      { id: "strategies" as const, label: t.strategies, icon: Settings2 },
       { id: "market" as const, label: t.market, icon: BarChart3 },
       { id: "orders" as const, label: t.orders, icon: TerminalSquare },
       { id: "account" as const, label: t.account, icon: BadgeDollarSign },
@@ -317,10 +409,7 @@ function App() {
       </aside>
       <section className="workspace">
         <header className="topbar">
-          <div>
-            <h1>{tabs.find((item) => item.id === tab)?.label}</h1>
-            <p>{health?.mode_message ?? t.testSafety}</p>
-          </div>
+          <h1>{tabs.find((item) => item.id === tab)?.label}</h1>
           <div className="refreshControl">
             <button className="iconButton" onClick={() => void refresh()} aria-label={t.refresh}>
               <RefreshCw size={18} className={refreshing ? "spin" : ""} />
@@ -410,6 +499,7 @@ function Dashboard({
           rows={activity.filter((row) => row.level !== "info").slice(0, 6)}
           columns={["ts", "level", "symbol", "message"]}
           empty={t.noRows}
+          t={t}
         />
       </section>
     </div>
@@ -434,37 +524,16 @@ function Strategies({
   onChanged: () => Promise<void>;
   t: typeof dictionary.en;
 }) {
-  const [symbol, setSymbol] = useState("NASDAQ:AAPL");
-  async function add() {
-    await fetch("/api/strategies", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        strategy_name: "day_many_bian",
-        symbol,
-        enabled: true,
-        params: {}
-      })
-    });
-    await onChanged();
-  }
   async function toggle(strategy: StrategyInstance) {
     await fetch(`/api/strategies/${strategy.id}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...strategy, enabled: !strategy.enabled, mode: "paper" })
+      body: JSON.stringify({ enabled: !strategy.enabled })
     });
     await onChanged();
   }
   return (
     <div className="stack">
-      <section className="toolbar">
-        <input value={symbol} onChange={(event) => setSymbol(event.target.value)} />
-        <button className="primaryButton" onClick={() => void add()}>
-          <ListPlus size={16} />
-          <span>{t.add}</span>
-        </button>
-      </section>
       <Table
         rows={strategies.map((strategy) => ({
           ...strategy,
@@ -477,6 +546,7 @@ function Strategies({
         }))}
         columns={["symbol", "strategy_name", "status", "action"]}
         empty={t.noRows}
+        t={t}
       />
     </div>
   );
@@ -540,13 +610,16 @@ function Market({ t }: { t: typeof dictionary.en }) {
   return (
     <div className="stack">
       <section className="toolbar">
-        <select value={selected} onChange={(event) => void switchStrategy(event.target.value)}>
-          {strategies.map((strategy) => (
-            <option key={strategy.id} value={strategy.id}>
-              {strategy.symbol} / {strategy.id}
-            </option>
-          ))}
-        </select>
+        <label className="fieldLabel">
+          <span>{t.columnHeaders.symbol}</span>
+          <select value={selected} onChange={(event) => void switchStrategy(event.target.value)}>
+            {strategies.map((strategy) => (
+              <option key={strategy.id} value={strategy.id}>
+                {strategy.symbol} / {strategy.id}
+              </option>
+            ))}
+          </select>
+        </label>
         <button className="smallButton" onClick={() => void clearVisible()}>
           {t.clear}
         </button>
@@ -583,11 +656,13 @@ function Orders({
         rows={orders}
         columns={["symbol", "side", "role", "status", "stop_price", "fill_price", "stop_loss"]}
         empty={t.noOrders}
+        t={t}
       />
       <Table
         rows={cycles}
         columns={["symbol", "status", "opened_at", "closed_at", "realized_pnl"]}
         empty={t.noRows}
+        t={t}
       />
     </div>
   );
@@ -630,9 +705,9 @@ function Account({
           <button className="dangerButton" onClick={() => void resetPaper()}>{t.reset}</button>
           <span className="muted">{account.message ?? t.testSafety}</span>
         </section>
-        <Table rows={account.paper_account ? [account.paper_account] : []} columns={["starting_balance", "cash_balance", "realized_pnl", "unrealized_pnl", "current_equity", "peak_equity", "max_drawdown"]} empty={t.noRows} />
-        <Table rows={account.positions ?? []} columns={["symbol", "side", "quantity", "average_price", "market_price", "unrealized_pnl"]} empty={t.noRows} />
-        <Table rows={account.history ?? []} columns={["created_at", "event_type", "amount", "message"]} empty={t.noRows} />
+        <Table rows={account.paper_account ? [account.paper_account] : []} columns={["starting_balance", "cash_balance", "realized_pnl", "unrealized_pnl", "current_equity", "peak_equity", "max_drawdown"]} empty={t.noRows} t={t} />
+        <Table rows={account.positions ?? []} columns={["symbol", "side", "quantity", "average_price", "market_price", "unrealized_pnl"]} empty={t.noRows} t={t} />
+        <Table rows={account.history ?? []} columns={["created_at", "event_type", "amount", "message"]} empty={t.noRows} t={t} />
       </div>
     );
   }
@@ -651,9 +726,9 @@ function Account({
           <span>{account.error}</span>
         </section>
       )}
-      <Table rows={account?.balance ? [account.balance] : []} columns={["total_asset_currency", "total_cash_balance", "total_net_liquidation_value", "total_day_profit_loss"]} empty={t.noRows} />
-      <Table rows={account?.positions ?? []} columns={["symbol", "quantity", "last_price", "unrealized_profit_loss"]} empty={t.noRows} />
-      <Table rows={account?.open_orders ?? []} columns={["client_order_id", "combo_type", "orders"]} empty={t.noRows} />
+      <Table rows={account?.balance ? [account.balance] : []} columns={["total_asset_currency", "total_cash_balance", "total_net_liquidation_value", "total_day_profit_loss"]} empty={t.noRows} t={t} />
+      <Table rows={account?.positions ?? []} columns={["symbol", "quantity", "last_price", "unrealized_profit_loss"]} empty={t.noRows} t={t} />
+      <Table rows={account?.open_orders ?? []} columns={["client_order_id", "combo_type", "orders"]} empty={t.noRows} t={t} />
     </div>
   );
 }
@@ -679,27 +754,29 @@ function StoragePanel({
   return (
     <div className="stack">
       <section className="toolbar">
-        <button className="smallButton" onClick={() => void cleanup(true)}>Dry run</button>
-        <button className="primaryButton" onClick={() => void cleanup(false)}>Cleanup</button>
+        <button className="smallButton" onClick={() => void cleanup(true)}>{t.dryRun}</button>
+        <button className="primaryButton" onClick={() => void cleanup(false)}>{t.cleanup}</button>
         <span className="muted">{String(storage?.database_bytes ?? 0)} bytes</span>
       </section>
-      <Table rows={rows} columns={["activity", "orders", "fills", "cycles", "paper_account_events", "quote_snapshots", "bars"]} empty={t.noRows} />
+      <Table rows={rows} columns={["activity", "orders", "fills", "cycles", "paper_account_events", "quote_snapshots", "bars"]} empty={t.noRows} t={t} />
     </div>
   );
 }
 
 function ActivityLog({ rows, t }: { rows: ActivityRow[]; t: typeof dictionary.en }) {
-  return <Table rows={rows} columns={["ts", "level", "symbol", "event_type", "message"]} empty={t.noActivity} />;
+  return <Table rows={rows} columns={["ts", "level", "symbol", "event_type", "message"]} empty={t.noActivity} t={t} />;
 }
 
 function Table({
   rows,
   columns,
-  empty
+  empty,
+  t
 }: {
   rows: Record<string, unknown>[];
   columns: string[];
   empty: string;
+  t: typeof dictionary.en;
 }) {
   return (
     <section className="panel tablePanel">
@@ -710,7 +787,7 @@ function Table({
           <thead>
             <tr>
               {columns.map((column) => (
-                <th key={column}>{column.replaceAll("_", " ")}</th>
+                <th key={column}>{columnHeader(column, t)}</th>
               ))}
             </tr>
           </thead>
@@ -734,6 +811,16 @@ function renderCell(value: unknown): React.ReactNode {
   if (value === null || value === undefined) return "";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function columnHeader(column: string, t: typeof dictionary.en): string {
+  return t.columnHeaders[column as keyof typeof t.columnHeaders] ?? humanizeColumn(column);
+}
+
+function humanizeColumn(column: string): string {
+  return column
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

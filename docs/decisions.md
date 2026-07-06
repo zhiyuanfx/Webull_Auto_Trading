@@ -24,8 +24,9 @@ orders, and a FastAPI/React operator UI. Runtime mode is global:
 - `live`: Webull account reads and live strategy configuration only; execution is disabled.
 
 Strategy instances are configured from `config/strategies.test.yml` or
-`config/strategies.live.yml` based on the active mode and can also be edited through the
-local API until the next mode reload.
+`config/strategies.live.yml` based on the active mode. Strategy additions and parameter
+changes are made in source/config, not through the UI. The local API supports runtime
+pause/resume controls for configured instances.
 
 The first ported strategy is `day_many_bian`, modeled as a Python state machine with daily
 brackets, reverse-buffer entries after the first cycle, trailing stop updates, optional

@@ -147,15 +147,6 @@ h2 {
   font-size: 15px;
 }
 
-.topbar p {
-  margin-top: 4px;
-  color: #6c6f67;
-}
-
-.dark .topbar p {
-  color: #b5b9ad;
-}
-
 .grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(150px, 1fr));
@@ -258,6 +249,19 @@ h2 {
 }
 
 .dark .statusStrip {
+  color: #b5b9ad;
+}
+
+.fieldLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #5a5f56;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dark .fieldLabel {
   color: #b5b9ad;
 }
 

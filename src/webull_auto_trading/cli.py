@@ -114,7 +114,8 @@ def diagnose_payload(settings: Settings | None = None) -> dict[str, Any]:
         "token_dir_exists": live_token_dir.exists(),
         "token_wait_seconds": settings.webull_prod_token_wait_seconds,
         "runtime_db_path": str(settings.runtime_db_path),
-        "strategies_config_path": str(settings.strategies_config_path),
+        "strategies_test_config_path": str(settings.strategies_test_config_path),
+        "strategies_live_config_path": str(settings.strategies_live_config_path),
         "insightsentry_configured": bool(
             settings.insightsentry_api_key
             or settings.insightsentry_websocket_key

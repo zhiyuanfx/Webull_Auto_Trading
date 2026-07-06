@@ -48,8 +48,6 @@ class RuntimeService:
     def reload_strategy_config(self) -> None:
         path = self.mode_config_path()
         configured = load_strategy_instances(path)
-        if not configured and not path.exists():
-            configured = load_strategy_instances(self.settings.strategies_config_path)
         self.repository.replace_strategy_instances(configured)
 
     def set_runtime_mode(self, mode: RuntimeMode | str) -> dict[str, Any]:

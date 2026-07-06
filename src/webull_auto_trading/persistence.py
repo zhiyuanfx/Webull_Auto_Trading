@@ -268,21 +268,6 @@ class RuntimeRepository:
             )
         return instance
 
-    def create_strategy_instance(self, data: dict[str, Any]) -> StrategyInstance:
-        mode = ExecutionMode(data.get("mode", ExecutionMode.PAPER))
-        if mode != ExecutionMode.PAPER:
-            raise ValueError("strategy instance mode must be paper")
-        instance = StrategyInstance(
-            id=str(data.get("id") or new_id("st")),
-            strategy_name=str(data.get("strategy_name") or "day_many_bian"),
-            symbol=str(data["symbol"]),
-            account_id=str(data.get("account_id") or ""),
-            enabled=bool(data.get("enabled", True)),
-            mode=mode,
-            params=dict(data.get("params") or {}),
-        )
-        return self.upsert_strategy_instance(instance)
-
     def update_strategy_instance(
         self,
         instance_id: str,

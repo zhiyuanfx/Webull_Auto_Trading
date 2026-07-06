@@ -21,14 +21,8 @@ class RuntimeModePayload(BaseModel):
     mode: RuntimeMode
 
 
-class StrategyPayload(BaseModel):
-    id: str | None = None
-    strategy_name: str = "day_many_bian"
-    symbol: str
-    account_id: str = ""
-    enabled: bool = True
-    mode: str = Field(default="paper", pattern="^paper$")
-    params: dict[str, Any] = Field(default_factory=dict)
+class StrategyUpdatePayload(BaseModel):
+    enabled: bool
 
 
 class PaperDepositPayload(BaseModel):
@@ -83,17 +77,12 @@ def create_app() -> FastAPI:
     def list_strategies() -> list[dict[str, Any]]:
         return [asdict(item) for item in get_runtime().repository.list_strategy_instances()]
 
-    @app.post("/api/strategies", status_code=201)
-    def create_strategy(payload: StrategyPayload) -> dict[str, Any]:
-        instance = get_runtime().repository.create_strategy_instance(payload.model_dump())
-        return asdict(instance)
-
     @app.put("/api/strategies/{strategy_id}")
-    def update_strategy(strategy_id: str, payload: StrategyPayload) -> dict[str, Any]:
+    def update_strategy(strategy_id: str, payload: StrategyUpdatePayload) -> dict[str, Any]:
         try:
             instance = get_runtime().repository.update_strategy_instance(
                 strategy_id,
-                payload.model_dump(exclude_unset=True),
+                {"enabled": payload.enabled},
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="strategy not found") from exc

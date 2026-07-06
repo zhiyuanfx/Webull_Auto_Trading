@@ -12,7 +12,7 @@ def load_strategy_instances(path: Path) -> list[StrategyInstance]:
     try:
         import yaml
     except ImportError as exc:
-        raise RuntimeError("Install PyYAML to load config/strategies.yml") from exc
+        raise RuntimeError("Install PyYAML to load strategy config files") from exc
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     items = payload.get("strategies") if isinstance(payload, dict) else payload
     if not items:

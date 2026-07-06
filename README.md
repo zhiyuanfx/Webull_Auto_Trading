@@ -70,7 +70,8 @@ npm run dev
 ```
 
 Mode-specific strategy configs live in `config/strategies.test.yml` and
-`config/strategies.live.yml`. They are disabled by default and contain no secrets.
+`config/strategies.live.yml`. Add strategies there, not through the UI. They are disabled by
+default and contain no secrets.
 
 ## Verification
 

@@ -1,4 +1,11 @@
-from webull_auto_trading.domain import ExecutionMode, OrderRole, OrderSide, OrderStatus, RuntimeMode
+from webull_auto_trading.domain import (
+    ExecutionMode,
+    OrderRole,
+    OrderSide,
+    OrderStatus,
+    RuntimeMode,
+    StrategyInstance,
+)
 from webull_auto_trading.order_manager import PaperOrderBook
 from webull_auto_trading.persistence import RuntimeRepository
 
@@ -7,14 +14,14 @@ def test_sqlite_strategy_instances_survive_repository_restart(tmp_path) -> None:
     db_path = tmp_path / "runtime.sqlite3"
     repo = RuntimeRepository(db_path)
     repo.init_db()
-    created = repo.create_strategy_instance(
-        {
-            "id": "st-1",
-            "strategy_name": "day_many_bian",
-            "symbol": "NASDAQ:AAPL",
-            "mode": "paper",
-            "params": {"lots": 0.5},
-        }
+    created = repo.upsert_strategy_instance(
+        StrategyInstance(
+            id="st-1",
+            strategy_name="day_many_bian",
+            symbol="NASDAQ:AAPL",
+            mode=ExecutionMode.PAPER,
+            params={"lots": 0.5},
+        )
     )
 
     restarted = RuntimeRepository(db_path)
