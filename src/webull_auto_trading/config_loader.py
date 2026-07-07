@@ -23,12 +23,18 @@ def load_strategy_instances(path: Path) -> list[StrategyInstance]:
 
 
 def _instance_from_config(item: dict[str, Any]) -> StrategyInstance:
+    market_data_symbol = str(item.get("market_data_symbol") or item.get("symbol") or "")
     return StrategyInstance(
         id=str(item.get("id") or new_id("st")),
         strategy_name=str(item.get("strategy_name") or "day_many_bian"),
-        symbol=str(item["symbol"]),
+        symbol=market_data_symbol,
         account_id=str(item.get("account_id") or ""),
         enabled=bool(item.get("enabled", True)),
         mode=ExecutionMode.PAPER,
+        market_data_symbol=market_data_symbol,
+        webull_symbol=str(item.get("webull_symbol") or ""),
+        account_alias=str(item.get("account_alias") or ""),
+        asset_class=str(item.get("asset_class") or ""),
+        live_execution_enabled=bool(item.get("live_execution_enabled", False)),
         params=dict(item.get("params") or {}),
     )

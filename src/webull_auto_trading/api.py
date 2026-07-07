@@ -100,6 +100,42 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="strategy not found") from exc
 
+    @app.post("/api/live/strategies/{strategy_id}/enable-execution")
+    def enable_live_execution(strategy_id: str) -> dict[str, Any]:
+        try:
+            return get_runtime().set_strategy_live_execution(strategy_id, True)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="strategy not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/live/strategies/{strategy_id}/disable-execution")
+    def disable_live_execution(strategy_id: str) -> dict[str, Any]:
+        try:
+            return get_runtime().set_strategy_live_execution(strategy_id, False)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="strategy not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/live/reconciliation")
+    def live_reconciliation() -> dict[str, Any]:
+        return get_runtime().live_reconciliation_snapshot()
+
+    @app.get("/api/live/orders")
+    def live_orders() -> list[dict[str, Any]]:
+        return [asdict(item) for item in get_runtime().repository.list_live_order_intents()]
+
+    @app.post("/api/live/strategies/{strategy_id}/flatten")
+    def live_flatten(strategy_id: str) -> dict[str, Any]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Live market flatten for {strategy_id} is not wired until "
+                "submit/reconciliation controls are completed"
+            ),
+        )
+
     @app.post("/api/strategies/flatten")
     def flatten_all_strategies() -> dict[str, Any]:
         try:
@@ -174,19 +210,49 @@ def create_app() -> FastAPI:
                 "history": runtime.repository.list_paper_history(limit=20),
             }
         settings = get_settings()
+        account_alias = settings.webull_account_default_alias
+        account_id = settings.resolve_webull_account_alias(account_alias)
         if not refresh:
             snapshot = AccountSnapshot(
                 configured=settings.production_configured,
-                account_id=settings.webull_account_id,
+                account_id=account_id,
                 error=None if settings.production_configured else "Webull credentials missing",
             )
-            return asdict(snapshot)
-        snapshot = await WebullReadService(settings).snapshot()
+            return {
+                "mode": RuntimeMode.LIVE.value,
+                "message": runtime.mode_message(),
+                "account_alias": account_alias,
+                **asdict(snapshot),
+            }
+        snapshot = await WebullReadService(settings).snapshot(account_id)
         return {
             "mode": RuntimeMode.LIVE.value,
             "message": runtime.mode_message(),
+            "account_alias": account_alias,
             **asdict(snapshot),
         }
+
+    @app.get("/api/webull/account-aliases")
+    def webull_account_aliases() -> dict[str, Any]:
+        settings = get_settings()
+        return {
+            "default_alias": settings.webull_account_default_alias,
+            "aliases": [
+                {"alias": alias, "configured": True}
+                for alias in sorted(settings.webull_account_aliases())
+            ],
+            "legacy_account_id_configured": bool(settings.webull_account_id),
+        }
+
+    @app.get("/api/webull/accounts")
+    async def webull_accounts(raw: bool = False) -> dict[str, Any]:
+        from webull_auto_trading.cli import fetch_accounts
+        from webull_auto_trading.webull import WebullError
+
+        try:
+            return await fetch_accounts(raw=raw)
+        except WebullError as exc:
+            raise HTTPException(status_code=502, detail=exc.message) from exc
 
     @app.get("/api/paper-account")
     def paper_account() -> dict[str, Any]:

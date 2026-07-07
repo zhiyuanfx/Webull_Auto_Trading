@@ -9,6 +9,9 @@ from typing import Any
 
 from webull_auto_trading.domain import (
     ExecutionMode,
+    LiveIntentAction,
+    LiveIntentStatus,
+    LiveOrderIntent,
     OrderRole,
     OrderSide,
     OrderStatus,
@@ -74,6 +77,11 @@ class RuntimeRepository:
                     account_id TEXT NOT NULL DEFAULT '',
                     enabled INTEGER NOT NULL DEFAULT 1,
                     mode TEXT NOT NULL DEFAULT 'paper',
+                    market_data_symbol TEXT NOT NULL DEFAULT '',
+                    webull_symbol TEXT NOT NULL DEFAULT '',
+                    account_alias TEXT NOT NULL DEFAULT '',
+                    asset_class TEXT NOT NULL DEFAULT '',
+                    live_execution_enabled INTEGER NOT NULL DEFAULT 0,
                     params_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -188,8 +196,38 @@ class RuntimeRepository:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (scope, ref_id)
                 );
+                CREATE TABLE IF NOT EXISTS live_order_intents (
+                    id TEXT PRIMARY KEY,
+                    strategy_instance_id TEXT NOT NULL,
+                    cycle_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    market_data_symbol TEXT NOT NULL,
+                    webull_symbol TEXT NOT NULL,
+                    account_alias TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    client_order_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    request_json TEXT NOT NULL DEFAULT '{}',
+                    response_json TEXT NOT NULL DEFAULT '{}',
+                    error_message TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(account_id, client_order_id)
+                );
+                CREATE TABLE IF NOT EXISTS live_reconciliation_events (
+                    id TEXT PRIMARY KEY,
+                    strategy_instance_id TEXT NOT NULL,
+                    intent_id TEXT,
+                    status TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
                 """
             )
+            self._ensure_strategy_live_columns(conn)
             conn.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -197,6 +235,29 @@ class RuntimeRepository:
         if self.get_setting("runtime_mode") is None:
             self.set_runtime_mode(RuntimeMode.TEST)
         self.ensure_paper_account()
+
+    def _ensure_strategy_live_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(strategy_instances)").fetchall()
+        }
+        columns = {
+            "market_data_symbol": "TEXT NOT NULL DEFAULT ''",
+            "webull_symbol": "TEXT NOT NULL DEFAULT ''",
+            "account_alias": "TEXT NOT NULL DEFAULT ''",
+            "asset_class": "TEXT NOT NULL DEFAULT ''",
+            "live_execution_enabled": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, definition in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE strategy_instances ADD COLUMN {name} {definition}")
+        conn.execute(
+            """
+            UPDATE strategy_instances
+            SET market_data_symbol = symbol
+            WHERE market_data_symbol = ''
+            """
+        )
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self.connect() as conn:
@@ -242,15 +303,21 @@ class RuntimeRepository:
                 """
                 INSERT INTO strategy_instances(
                     id, strategy_name, symbol, account_id, enabled, mode,
-                    params_json, created_at, updated_at
+                    market_data_symbol, webull_symbol, account_alias, asset_class,
+                    live_execution_enabled, params_json, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     strategy_name=excluded.strategy_name,
                     symbol=excluded.symbol,
                     account_id=excluded.account_id,
                     enabled=excluded.enabled,
                     mode=excluded.mode,
+                    market_data_symbol=excluded.market_data_symbol,
+                    webull_symbol=excluded.webull_symbol,
+                    account_alias=excluded.account_alias,
+                    asset_class=excluded.asset_class,
+                    live_execution_enabled=excluded.live_execution_enabled,
                     params_json=excluded.params_json,
                     updated_at=excluded.updated_at
                 """,
@@ -261,6 +328,11 @@ class RuntimeRepository:
                     instance.account_id,
                     int(instance.enabled),
                     instance.mode.value,
+                    instance.market_data_symbol or instance.symbol,
+                    instance.webull_symbol,
+                    instance.account_alias,
+                    instance.asset_class,
+                    int(instance.live_execution_enabled),
                     encode_json(instance.params),
                     iso(instance.created_at),
                     iso(instance.updated_at),
@@ -277,7 +349,17 @@ class RuntimeRepository:
         if instance_id not in instances:
             raise KeyError(instance_id)
         current = instances[instance_id]
-        for field_name in ("strategy_name", "symbol", "account_id", "enabled"):
+        for field_name in (
+            "strategy_name",
+            "symbol",
+            "account_id",
+            "enabled",
+            "market_data_symbol",
+            "webull_symbol",
+            "account_alias",
+            "asset_class",
+            "live_execution_enabled",
+        ):
             if field_name in changes:
                 setattr(current, field_name, changes[field_name])
         if "mode" in changes:
@@ -289,7 +371,15 @@ class RuntimeRepository:
         return self.upsert_strategy_instance(current)
 
     def list_table(self, table: str, limit: int = 200) -> list[dict[str, Any]]:
-        if table not in {"orders", "fills", "cycles", "activity", "bars"}:
+        if table not in {
+            "orders",
+            "fills",
+            "cycles",
+            "activity",
+            "bars",
+            "live_order_intents",
+            "live_reconciliation_events",
+        }:
             raise ValueError(f"Unsupported table: {table}")
         with self.connect() as conn:
             rows = conn.execute(
@@ -443,6 +533,122 @@ class RuntimeRepository:
         with self.connect() as conn:
             rows = conn.execute("SELECT * FROM fills ORDER BY filled_at, id").fetchall()
         return [self._paper_fill_from_row(row) for row in rows]
+
+    def upsert_live_order_intent(self, intent: LiveOrderIntent) -> LiveOrderIntent:
+        intent.updated_at = utc_now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO live_order_intents(
+                    id, strategy_instance_id, cycle_id, action, side, quantity,
+                    market_data_symbol, webull_symbol, account_alias, account_id,
+                    client_order_id, status, request_json, response_json, error_message,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    status=excluded.status,
+                    request_json=excluded.request_json,
+                    response_json=excluded.response_json,
+                    error_message=excluded.error_message,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    intent.id,
+                    intent.strategy_instance_id,
+                    intent.cycle_id,
+                    intent.action.value,
+                    intent.side.value,
+                    intent.quantity,
+                    intent.market_data_symbol,
+                    intent.webull_symbol,
+                    intent.account_alias,
+                    intent.account_id,
+                    intent.client_order_id,
+                    intent.status.value,
+                    encode_json(intent.request),
+                    encode_json(intent.response),
+                    intent.error_message,
+                    iso(intent.created_at),
+                    iso(intent.updated_at),
+                ),
+            )
+        return intent
+
+    def list_live_order_intents(
+        self,
+        *,
+        strategy_instance_id: str | None = None,
+        limit: int = 200,
+    ) -> list[LiveOrderIntent]:
+        params: tuple[Any, ...]
+        if strategy_instance_id:
+            where = "WHERE strategy_instance_id = ?"
+            params = (strategy_instance_id, limit)
+        else:
+            where = ""
+            params = (limit,)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM live_order_intents
+                {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [self._live_order_intent_from_row(row) for row in rows]
+
+    def has_unresolved_live_intent(self, strategy_instance_id: str) -> bool:
+        unresolved = (
+            LiveIntentStatus.PENDING_SUBMIT.value,
+            LiveIntentStatus.SUBMITTED.value,
+            LiveIntentStatus.ACCEPTED.value,
+            LiveIntentStatus.PARTIAL_FILLED.value,
+            LiveIntentStatus.UNKNOWN.value,
+            LiveIntentStatus.DESYNCED.value,
+        )
+        placeholders = ",".join("?" for _ in unresolved)
+        with self.connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT 1 FROM live_order_intents
+                WHERE strategy_instance_id = ?
+                  AND status IN ({placeholders})
+                LIMIT 1
+                """,
+                (strategy_instance_id, *unresolved),
+            ).fetchone()
+        return row is not None
+
+    def log_live_reconciliation_event(
+        self,
+        *,
+        strategy_instance_id: str,
+        status: LiveIntentStatus | str,
+        message: str,
+        intent_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO live_reconciliation_events(
+                    id, strategy_instance_id, intent_id, status, message, payload_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_id("lre"),
+                    strategy_instance_id,
+                    intent_id,
+                    status.value if isinstance(status, LiveIntentStatus) else str(status),
+                    message,
+                    encode_json(payload or {}),
+                    iso(),
+                ),
+            )
 
     def sync_paper_state(
         self,
@@ -644,6 +850,8 @@ class RuntimeRepository:
             "paper_positions",
             "paper_account_events",
             "activity",
+            "live_order_intents",
+            "live_reconciliation_events",
         ]
         with self.connect() as conn:
             counts = {
@@ -899,6 +1107,28 @@ class RuntimeRepository:
         )
 
     @staticmethod
+    def _live_order_intent_from_row(row: sqlite3.Row) -> LiveOrderIntent:
+        return LiveOrderIntent(
+            id=row["id"],
+            strategy_instance_id=row["strategy_instance_id"],
+            cycle_id=row["cycle_id"],
+            action=LiveIntentAction(row["action"]),
+            side=OrderSide(row["side"]),
+            quantity=row["quantity"],
+            market_data_symbol=row["market_data_symbol"],
+            webull_symbol=row["webull_symbol"],
+            account_alias=row["account_alias"],
+            account_id=row["account_id"],
+            client_order_id=row["client_order_id"],
+            status=LiveIntentStatus(row["status"]),
+            request=decode_json(row["request_json"], {}),
+            response=decode_json(row["response_json"], {}),
+            error_message=row["error_message"],
+            created_at=parse_dt(row["created_at"]),
+            updated_at=parse_dt(row["updated_at"]),
+        )
+
+    @staticmethod
     def _instance_from_row(row: sqlite3.Row) -> StrategyInstance:
         try:
             mode = ExecutionMode(row["mode"])
@@ -911,6 +1141,11 @@ class RuntimeRepository:
             account_id=row["account_id"],
             enabled=bool(row["enabled"]),
             mode=mode,
+            market_data_symbol=row["market_data_symbol"] or row["symbol"],
+            webull_symbol=row["webull_symbol"],
+            account_alias=row["account_alias"],
+            asset_class=row["asset_class"],
+            live_execution_enabled=bool(row["live_execution_enabled"]),
             params=decode_json(row["params_json"], {}),
             created_at=parse_dt(row["created_at"]),
             updated_at=parse_dt(row["updated_at"]),

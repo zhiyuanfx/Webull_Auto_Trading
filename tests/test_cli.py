@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from webull_auto_trading.cli import diagnose_payload, redact, summarize_accounts
+from webull_auto_trading.cli import (
+    diagnose_live_payload,
+    diagnose_payload,
+    redact,
+    summarize_accounts,
+)
 from webull_auto_trading.config import Settings
 
 
@@ -66,3 +71,35 @@ def test_diagnose_payload_does_not_expose_credentials(tmp_path: Path) -> None:
     assert "app-key" not in str(payload)
     assert "app-secret" not in str(payload)
     assert "acct-1" not in str(payload)
+
+
+def test_diagnose_live_payload_reports_alias_names_without_account_ids(tmp_path: Path) -> None:
+    config_path = tmp_path / "strategies.live.yml"
+    config_path.write_text(
+        """
+strategies:
+  - id: live-aapl
+    strategy_name: day_many_bian
+    market_data_symbol: NASDAQ:AAPL
+    webull_symbol: AAPL
+    account_alias: stock_margin
+    asset_class: stock
+    enabled: false
+    live_execution_enabled: true
+""",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        webull_token_dir=tmp_path,
+        webull_account_stock_margin_id="acct-secret",
+        strategies_live_config_path=config_path,
+        live_execution_master_enable=True,
+        _env_file=None,
+    )
+
+    payload = diagnose_live_payload(settings)
+
+    assert payload["configured_account_aliases"] == ["stock_margin"]
+    assert payload["live_execution_master_enabled"] is True
+    assert payload["strategies"][0]["errors"] == []
+    assert "acct-secret" not in str(payload)

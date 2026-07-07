@@ -7,7 +7,8 @@ console.
 
 Runtime mode is global: `test` mode paper trades against real InsightSentry market data, and
 `live` mode allows Webull account/balance/position/open-order reads through the official SDK.
-Live order placement, replacement, cancellation, and flattening are not implemented.
+It also has named account aliases, live strategy metadata, and persisted live order intent
+scaffolding. Runtime strategy decisions still do not transmit live orders.
 
 ## Quick Start
 
@@ -18,6 +19,7 @@ conda activate webull-strategy-desk
 python -m pip install -e ".[dev,webull]"
 cp .env.example .env
 webull-auto-trading diagnose
+webull-auto-trading diagnose-live
 webull-auto-trading init-db
 ```
 
@@ -42,6 +44,11 @@ WEBULL_PROD_APP_SECRET=
 WEBULL_TOKEN_DIR=.runtime/webull_tokens
 WEBULL_PROD_TOKEN_WAIT_SECONDS=300
 WEBULL_ACCOUNT_ID=
+WEBULL_ACCOUNT_DEFAULT_ALIAS=stock_margin
+WEBULL_ACCOUNT_STOCK_CASH_ID=
+WEBULL_ACCOUNT_STOCK_MARGIN_ID=
+WEBULL_ACCOUNT_FUTURES_ID=
+LIVE_EXECUTION_MASTER_ENABLE=false
 ```
 
 SDK tokens are stored under `.runtime/webull_tokens/live`, which is ignored by git. Do not
@@ -52,6 +59,7 @@ payloads containing secrets.
 
 ```bash
 webull-auto-trading diagnose
+webull-auto-trading diagnose-live
 webull-auto-trading accounts
 webull-auto-trading accounts --raw
 webull-auto-trading init-db

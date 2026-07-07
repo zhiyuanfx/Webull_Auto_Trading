@@ -2,9 +2,12 @@
 strategies:
   - id: live_day_many_bian_aapl
     strategy_name: day_many_bian
-    symbol: NASDAQ:AAPL
-    account_id: ""
+    market_data_symbol: NASDAQ:AAPL
+    webull_symbol: AAPL
+    account_alias: stock_margin
+    asset_class: stock
     enabled: false
+    live_execution_enabled: false
     params:
       lots: 0.3
       bracket_buffer_price: 0.01

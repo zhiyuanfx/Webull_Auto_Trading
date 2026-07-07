@@ -68,11 +68,17 @@ sanitization, quote merging/rejection, daily-bar bootstrap, paper order fills, s
 bracket logic, per-instance isolation, runtime mode switching, paper account persistence,
 and storage cleanup. They must not call Webull, InsightSentry, or submit live orders.
 
-## No live order placement
+## Live execution scaffolding, no runtime transmission
 
-Live mode is execution-read-only. The UI and API expose no live place, replace, cancel, or
-flatten commands. Any future live execution phase must re-check current official Webull docs
-and add explicit safety gates.
+Live mode now stores explicit live execution metadata on strategy instances, supports named
+Webull account aliases from `.env`, and persists live order intents plus reconciliation
+events. The live adapter can build the documented Webull market order shape and persist an
+intent before submission, but strategy quote evaluation still does not call that adapter.
+
+No runtime path transmits live orders yet. Any future wiring must keep Webull as account and
+order truth, use deterministic client order IDs, block duplicate in-flight actions, and pass
+runtime mode, master switch, per-strategy live execution, quote freshness, account alias,
+symbol, and reconciliation gates before submitting.
 
 ## Volatile market display
 

@@ -19,6 +19,8 @@
 - `src/webull_auto_trading/cli.py`: safe diagnostics, account id discovery helpers, and local
   runtime commands.
 - `src/webull_auto_trading/runtime.py`: Test/Live local runtime coordinator.
+- `src/webull_auto_trading/live_execution.py`: live order intent model, Webull market-order request
+  construction, and safety-gated adapter scaffolding.
 - `src/webull_auto_trading/market_data.py`: InsightSentry quote merge, subscription, and
   rejection rules.
 - `src/webull_auto_trading/insightsentry_stream.py`: production InsightSentry quote
@@ -30,9 +32,10 @@
 - `frontend/`: local React/Vite operator console.
 
 The runtime uses InsightSentry streaming data plus Python strategy code and Webull Trading
-API reads. Test mode owns paper trading and persistence. Live mode is Webull-read-only for
-this phase. The old external-alert bridge has been removed. Do not add live order placement
-without an explicit safety plan and user request.
+API reads. Test mode owns paper trading and persistence. Live mode has live execution
+metadata and persisted intent scaffolding, but no strategy/runtime path transmits live
+orders in this phase. The old external-alert bridge has been removed. Do not wire live order
+placement into runtime decisions without an explicit safety plan and user request.
 
 ## Safety invariants
 
@@ -41,7 +44,9 @@ without an explicit safety plan and user request.
 - SDK token caches under `.runtime/` and local data under `data/` are ignored and must not be
   deleted or migrated without explicit confirmation.
 - The Webull SDK wrapper is live-only. Ordinary tests must use mocks and must not call Webull.
-- Runtime supports global `test` and `live` modes. Live mode has no execution endpoints.
+- Runtime supports global `test` and `live` modes. Live order transmission remains blocked
+  unless a future runtime path passes global mode, master, per-strategy, quote, in-flight,
+  and reconciliation gates.
 - Strategy instances do not expose public per-strategy execution modes.
 - Market quote/series display is process-memory only; do not persist new quote or bar data.
 - There is no external-alert intake, local simulator, alternate trading environment, or live
@@ -55,6 +60,7 @@ conda env create -f environment.yml
 conda activate webull-strategy-desk
 python -m pip install -e ".[dev,webull]"
 webull-auto-trading diagnose
+webull-auto-trading diagnose-live
 webull-auto-trading accounts
 webull-auto-trading init-db
 webull-auto-trading cleanup --dry-run

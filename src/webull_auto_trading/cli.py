@@ -6,6 +6,8 @@ import json
 from typing import Any
 
 from webull_auto_trading.config import Settings, get_settings
+from webull_auto_trading.config_loader import load_strategy_instances
+from webull_auto_trading.live_execution import validate_live_strategy_config
 from webull_auto_trading.persistence import RuntimeRepository
 from webull_auto_trading.runtime import RuntimeService
 from webull_auto_trading.webull import WebullError, WebullTradingClient
@@ -124,10 +126,42 @@ def diagnose_payload(settings: Settings | None = None) -> dict[str, Any]:
     }
 
 
+def diagnose_live_payload(settings: Settings | None = None) -> dict[str, Any]:
+    settings = settings or get_settings()
+    live_token_dir = settings.webull_token_dir / "live"
+    strategies = load_strategy_instances(settings.strategies_live_config_path)
+    configured_aliases = sorted(settings.webull_account_aliases())
+    strategy_summaries = []
+    for strategy in strategies:
+        strategy_summaries.append(
+            {
+                "id": strategy.id,
+                "enabled": strategy.enabled,
+                "live_execution_enabled": strategy.live_execution_enabled,
+                "account_alias": strategy.account_alias,
+                "asset_class": strategy.asset_class,
+                "market_data_symbol": strategy.market_data_symbol or strategy.symbol,
+                "webull_symbol_configured": bool(strategy.webull_symbol),
+                "errors": validate_live_strategy_config(strategy, settings),
+            }
+        )
+    return {
+        "webull_configured": settings.production_configured,
+        "token_cache_exists": live_token_dir.exists(),
+        "configured_account_aliases": configured_aliases,
+        "default_alias": settings.webull_account_default_alias,
+        "legacy_account_id_configured": bool(settings.webull_account_id),
+        "live_execution_master_enabled": settings.live_execution_master_enable,
+        "strategies": strategy_summaries,
+        "places_live_orders": False,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="webull-auto-trading")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("diagnose", help="Print safe offline Webull configuration diagnostics")
+    commands.add_parser("diagnose-live", help="Print safe offline live execution diagnostics")
     accounts = commands.add_parser(
         "accounts", help="List Webull account id candidates from the authenticated API session"
     )
@@ -152,6 +186,8 @@ def main() -> None:
 
     if args.command == "diagnose":
         print_json(diagnose_payload())
+    elif args.command == "diagnose-live":
+        print_json(diagnose_live_payload())
     elif args.command == "accounts":
         try:
             print_json(asyncio.run(fetch_accounts(raw=args.raw)))

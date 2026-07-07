@@ -1,5 +1,8 @@
 from webull_auto_trading.domain import (
     ExecutionMode,
+    LiveIntentAction,
+    LiveIntentStatus,
+    LiveOrderIntent,
     OrderRole,
     OrderSide,
     OrderStatus,
@@ -20,6 +23,10 @@ def test_sqlite_strategy_instances_survive_repository_restart(tmp_path) -> None:
             strategy_name="day_many_bian",
             symbol="NASDAQ:AAPL",
             mode=ExecutionMode.PAPER,
+            webull_symbol="AAPL",
+            account_alias="stock_margin",
+            asset_class="stock",
+            live_execution_enabled=True,
             params={"lots": 0.5},
         )
     )
@@ -30,6 +37,11 @@ def test_sqlite_strategy_instances_survive_repository_restart(tmp_path) -> None:
     assert created.id == "st-1"
     assert len(instances) == 1
     assert instances[0].mode == ExecutionMode.PAPER
+    assert instances[0].market_data_symbol == "NASDAQ:AAPL"
+    assert instances[0].webull_symbol == "AAPL"
+    assert instances[0].account_alias == "stock_margin"
+    assert instances[0].asset_class == "stock"
+    assert instances[0].live_execution_enabled is True
     assert instances[0].params == {"lots": 0.5}
 
 
@@ -111,3 +123,36 @@ def test_paper_orders_fills_and_positions_restore(tmp_path) -> None:
     assert orders[0].id == order.id
     assert positions[0].quantity == 2
     assert account.unrealized_pnl == 10
+
+
+def test_live_order_intents_persist_and_block_unresolved(tmp_path) -> None:
+    db_path = tmp_path / "runtime.sqlite3"
+    repo = RuntimeRepository(db_path)
+    repo.init_db()
+    intent = LiveOrderIntent(
+        id="loi-1",
+        strategy_instance_id="st-1",
+        cycle_id="cyc-1",
+        action=LiveIntentAction.OPEN_MARKET,
+        side=OrderSide.BUY,
+        quantity=1,
+        market_data_symbol="NASDAQ:AAPL",
+        webull_symbol="AAPL",
+        account_alias="stock_margin",
+        account_id="acct-1",
+        client_order_id="client-1",
+        request={"order_type": "MARKET"},
+    )
+
+    repo.upsert_live_order_intent(intent)
+
+    restarted = RuntimeRepository(db_path)
+    intents = restarted.list_live_order_intents()
+    assert intents[0].client_order_id == "client-1"
+    assert intents[0].status == LiveIntentStatus.PENDING_SUBMIT
+    assert restarted.has_unresolved_live_intent("st-1") is True
+
+    intent.status = LiveIntentStatus.FILLED
+    restarted.upsert_live_order_intent(intent)
+
+    assert restarted.has_unresolved_live_intent("st-1") is False

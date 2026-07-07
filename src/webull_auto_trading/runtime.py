@@ -7,6 +7,7 @@ from typing import Any
 from webull_auto_trading.config import Settings
 from webull_auto_trading.config_loader import load_strategy_instances
 from webull_auto_trading.domain import QuoteState, RuntimeMode
+from webull_auto_trading.live_execution import validate_live_strategy_config
 from webull_auto_trading.market_data import (
     MarketStreamBuffer,
     QuoteBook,
@@ -103,6 +104,36 @@ class RuntimeService:
             symbol=instance.symbol,
         )
         return asdict(instance)
+
+    def set_strategy_live_execution(
+        self,
+        strategy_id: str,
+        enabled: bool,
+    ) -> dict[str, Any]:
+        if self.active_mode() != RuntimeMode.LIVE:
+            raise PermissionError("Live execution can only be changed in live mode")
+        instance = self.repository.update_strategy_instance(
+            strategy_id,
+            {"live_execution_enabled": enabled},
+        )
+        errors = validate_live_strategy_config(instance, self.settings) if enabled else []
+        self.repository.log_activity(
+            "LiveExecutionEnabled" if enabled else "LiveExecutionDisabled",
+            f"Live execution {'enabled' if enabled else 'disabled'} for {strategy_id}",
+            level="warning" if enabled else "info",
+            strategy_instance_id=instance.id,
+            symbol=instance.symbol,
+            payload={"blocked": bool(errors), "errors": errors},
+        )
+        return {**asdict(instance), "live_execution_errors": errors}
+
+    def live_reconciliation_snapshot(self) -> dict[str, Any]:
+        return {
+            "mode": self.active_mode().value,
+            "master_enabled": self.settings.live_execution_master_enable,
+            "intents": [asdict(item) for item in self.repository.list_live_order_intents()],
+            "events": self.repository.list_table("live_reconciliation_events"),
+        }
 
     def flatten_strategy(self, strategy_id: str) -> dict[str, Any]:
         if self.active_mode() == RuntimeMode.LIVE:

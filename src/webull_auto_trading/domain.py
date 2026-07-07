@@ -29,6 +29,24 @@ class OrderSide(StrEnum):
     SELL = "SELL"
 
 
+class LiveIntentAction(StrEnum):
+    OPEN_MARKET = "OPEN_MARKET"
+    CLOSE_MARKET = "CLOSE_MARKET"
+    FLATTEN_MARKET = "FLATTEN_MARKET"
+
+
+class LiveIntentStatus(StrEnum):
+    PENDING_SUBMIT = "PENDING_SUBMIT"
+    SUBMITTED = "SUBMITTED"
+    ACCEPTED = "ACCEPTED"
+    PARTIAL_FILLED = "PARTIAL_FILLED"
+    FILLED = "FILLED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+    UNKNOWN = "UNKNOWN"
+    DESYNCED = "DESYNCED"
+
+
 class OrderStatus(StrEnum):
     PENDING = "PENDING"
     FILLED = "FILLED"
@@ -62,9 +80,18 @@ class StrategyInstance:
     account_id: str = ""
     enabled: bool = True
     mode: ExecutionMode = ExecutionMode.PAPER
+    market_data_symbol: str = ""
+    webull_symbol: str = ""
+    account_alias: str = ""
+    asset_class: str = ""
+    live_execution_enabled: bool = False
     params: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        if not self.market_data_symbol:
+            self.market_data_symbol = self.symbol
 
 
 @dataclass(slots=True)
@@ -185,6 +212,27 @@ class MarketStreamMessage:
     symbol: str
     type: str
     raw: dict[str, Any]
+
+
+@dataclass(slots=True)
+class LiveOrderIntent:
+    id: str
+    strategy_instance_id: str
+    cycle_id: str
+    action: LiveIntentAction
+    side: OrderSide
+    quantity: float
+    market_data_symbol: str
+    webull_symbol: str
+    account_alias: str
+    account_id: str
+    client_order_id: str
+    status: LiveIntentStatus = LiveIntentStatus.PENDING_SUBMIT
+    request: dict[str, Any] = field(default_factory=dict)
+    response: dict[str, Any] = field(default_factory=dict)
+    error_message: str = ""
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
 
 
 def _float_or_none(value: Any) -> float | None:
