@@ -74,6 +74,24 @@ type StreamMessage = {
   raw: Record<string, unknown>;
 };
 
+type StreamState =
+  | "disabled_missing_credentials"
+  | "idle_no_symbols"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "error";
+
+type StreamStatus = {
+  state: StreamState;
+  connected: boolean;
+  desired_symbols: string[];
+  subscribed_symbols: string[];
+  last_message_at?: string | null;
+  last_error?: string | null;
+  reconnect_attempt: number;
+};
+
 type FlattenSummary = {
   strategy_id?: string | null;
   global_pause: boolean;
@@ -179,6 +197,23 @@ const dictionary = {
     service: "Service",
     status: "Status",
     storage: "Storage",
+    streamMessages: {
+      connectedNoMessages: "Waiting for market data...",
+      connecting: "Stream is connecting...",
+      error: "Stream error",
+      idleNoSymbols: "No enabled strategy symbols are subscribed.",
+      missingCredentials: "InsightSentry stream credentials are missing.",
+      reconnecting: "Stream is reconnecting..."
+    },
+    streamState: "Stream",
+    streamStates: {
+      connected: "Connected",
+      connecting: "Connecting",
+      disabled_missing_credentials: "Missing credentials",
+      error: "Error",
+      idle_no_symbols: "No symbols",
+      reconnecting: "Reconnecting"
+    },
     strategies: "Strategies",
     strategy: "Strategy",
     test: "Test",
@@ -283,6 +318,23 @@ const dictionary = {
     service: "服务",
     status: "状态",
     storage: "存储",
+    streamMessages: {
+      connectedNoMessages: "等待市场数据...",
+      connecting: "行情流正在连接...",
+      error: "行情流错误",
+      idleNoSymbols: "没有已启用的策略标的可订阅。",
+      missingCredentials: "缺少 InsightSentry 行情流凭证。",
+      reconnecting: "行情流正在重连..."
+    },
+    streamState: "行情流",
+    streamStates: {
+      connected: "已连接",
+      connecting: "连接中",
+      disabled_missing_credentials: "缺少凭证",
+      error: "错误",
+      idle_no_symbols: "无标的",
+      reconnecting: "重连中"
+    },
     strategies: "策略",
     strategy: "策略",
     test: "测试",
@@ -728,7 +780,13 @@ function Market({ strategies, t }: { strategies: StrategyInstance[]; t: typeof d
   const [selected, setSelected] = useState("");
   const [cursor, setCursor] = useState(0);
   const [messages, setMessages] = useState<StreamMessage[]>([]);
+  const [streamStatus, setStreamStatus] = useState<StreamStatus | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  async function pollStatus() {
+    const response = await fetch("/api/market/stream-status");
+    setStreamStatus(await response.json());
+  }
 
   async function poll(symbol = selected, since = cursor) {
     if (!symbol) return;
@@ -776,6 +834,12 @@ function Market({ strategies, t }: { strategies: StrategyInstance[]; t: typeof d
   }, [selected, symbols]);
 
   useEffect(() => {
+    void pollStatus();
+    const handle = window.setInterval(() => void pollStatus(), 1500);
+    return () => window.clearInterval(handle);
+  }, []);
+
+  useEffect(() => {
     void poll();
     const handle = window.setInterval(() => void poll(), 1500);
     return () => window.clearInterval(handle);
@@ -784,6 +848,23 @@ function Market({ strategies, t }: { strategies: StrategyInstance[]; t: typeof d
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages]);
+
+  const streamState = streamStatus?.state ?? "connecting";
+  const emptyMessage =
+    streamState === "disabled_missing_credentials"
+      ? t.streamMessages.missingCredentials
+      : streamState === "idle_no_symbols"
+        ? t.streamMessages.idleNoSymbols
+        : streamState === "connecting"
+          ? t.streamMessages.connecting
+          : streamState === "reconnecting"
+            ? streamStatus?.last_error || t.streamMessages.reconnecting
+            : streamState === "error"
+              ? streamStatus?.last_error || t.streamMessages.error
+              : selected
+                ? t.streamMessages.connectedNoMessages
+                : t.noMessages;
+  const subscribedSymbols = streamStatus?.subscribed_symbols ?? [];
 
   return (
     <div className="stack">
@@ -802,9 +883,19 @@ function Market({ strategies, t }: { strategies: StrategyInstance[]; t: typeof d
           {t.clear}
         </button>
       </section>
+      <section className="statusStrip">
+        <span>
+          {t.streamState}: {t.streamStates[streamState]}
+        </span>
+        <span>
+          {t.columnHeaders.symbol}:{" "}
+          {subscribedSymbols.length ? subscribedSymbols.join(", ") : t.noRows}
+        </span>
+        {streamStatus?.last_error ? <span>{streamStatus.last_error}</span> : null}
+      </section>
       <section className="panel streamPanel" ref={scrollRef}>
         {messages.length === 0 ? (
-          <div className="empty">{selected ? t.waitingForMarketData : t.noMessages}</div>
+          <div className="empty">{emptyMessage}</div>
         ) : (
           messages.map((message) => (
             <pre key={message.sequence}>

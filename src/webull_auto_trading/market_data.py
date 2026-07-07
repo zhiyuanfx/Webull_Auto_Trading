@@ -16,7 +16,7 @@ FATAL_ERRORS = {
     "server_busy",
     "internal_server_error",
 }
-QUOTE_REQUIRED_FIELDS = {"ask", "bid", "last_price", "lp_time", "delay_seconds"}
+QUOTE_REQUIRED_FIELDS = {"ask", "bid", "last_price", "delay_seconds"}
 QUOTE_PATCH_FIELDS = {
     "ask",
     "ask_size",
@@ -28,6 +28,7 @@ QUOTE_PATCH_FIELDS = {
     "delay_seconds",
     "high_price",
     "last_price",
+    "last_update",
     "low_price",
     "lp_time",
     "market_cap",
@@ -248,6 +249,16 @@ def build_subscription_payload(
     return {"api_key": api_key, "subscriptions": subscriptions}
 
 
+def build_quote_subscription_payload(api_key: str, symbols: list[str]) -> dict[str, Any]:
+    subscriptions = [
+        {"code": symbol, "type": "quote"}
+        for symbol in sorted({symbol for symbol in symbols if symbol.strip()})
+    ]
+    if not subscriptions:
+        raise ValueError("InsightSentry subscriptions cannot be empty")
+    return {"api_key": api_key, "subscriptions": subscriptions}
+
+
 def parse_market_message(message: str) -> ParsedMarketMessage:
     if message == "pong":
         return ParsedMarketMessage("pong", "pong")
@@ -265,6 +276,12 @@ def parse_market_message(message: str) -> ParsedMarketMessage:
             fatal=str(payload.get("error")) in FATAL_ERRORS,
         )
     if isinstance(payload, dict) and "data" in payload and isinstance(payload["data"], list):
+        return ParsedMarketMessage("quote", payload)
+    if (
+        isinstance(payload, dict)
+        and str(payload.get("code") or payload.get("symbol") or "").strip()
+        and any(field in payload for field in QUOTE_PATCH_FIELDS)
+    ):
         return ParsedMarketMessage("quote", payload)
     if isinstance(payload, dict) and "series" in payload:
         return ParsedMarketMessage("series", payload)

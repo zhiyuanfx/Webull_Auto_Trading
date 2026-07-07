@@ -21,6 +21,8 @@
 - `src/webull_auto_trading/runtime.py`: Test/Live local runtime coordinator.
 - `src/webull_auto_trading/market_data.py`: InsightSentry quote merge, subscription, and
   rejection rules.
+- `src/webull_auto_trading/insightsentry_stream.py`: production InsightSentry quote
+  WebSocket service and safe stream status.
 - `src/webull_auto_trading/strategy/day_many_bian.py`: first Python EA-style strategy port.
 - `src/webull_auto_trading/strategy/recycle_buy.py`: simple Test-mode paper recycle-buy EA.
 - `src/webull_auto_trading/order_manager.py`: virtual pending orders and paper fills.
@@ -56,7 +58,7 @@ webull-auto-trading diagnose
 webull-auto-trading accounts
 webull-auto-trading init-db
 webull-auto-trading cleanup --dry-run
-webull-auto-trading serve --reload
+webull-auto-trading serve --reload  # starts API plus one InsightSentry quote stream worker
 webull-auto-trading run
 python -m pytest
 ruff check .

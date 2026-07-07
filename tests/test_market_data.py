@@ -4,6 +4,7 @@ from webull_auto_trading.domain import QuoteState
 from webull_auto_trading.market_data import (
     MarketStreamBuffer,
     QuoteBook,
+    build_quote_subscription_payload,
     build_subscription_payload,
     merge_quote_fields,
     parse_market_message,
@@ -61,6 +62,35 @@ def test_quote_rejects_incomplete_delayed_and_stale() -> None:
     assert validate_quote(stale, now=now, max_staleness_seconds=30).ok is False
 
 
+def test_quote_validation_accepts_last_update_and_received_at_fallback() -> None:
+    now = datetime(2026, 7, 5, 16, 0, tzinfo=UTC)
+    with_last_update = QuoteState(
+        "NASDAQ:AAPL",
+        {
+            "code": "NASDAQ:AAPL",
+            "bid": 100.0,
+            "ask": 100.1,
+            "last_price": 100.05,
+            "last_update": now.timestamp() * 1000,
+            "delay_seconds": 0,
+        },
+    )
+    with_received_at = QuoteState(
+        "NASDAQ:AAPL",
+        {
+            "code": "NASDAQ:AAPL",
+            "bid": 100.0,
+            "ask": 100.1,
+            "last_price": 100.05,
+            "delay_seconds": 0,
+        },
+        received_at=now,
+    )
+
+    assert validate_quote(with_last_update, now=now).ok is True
+    assert validate_quote(with_received_at, now=now).ok is True
+
+
 def test_build_subscription_payload_is_complete_replacement_state() -> None:
     payload = build_subscription_payload(
         "key",
@@ -73,10 +103,23 @@ def test_build_subscription_payload_is_complete_replacement_state() -> None:
     assert {"code": "NASDAQ:AAPL", "type": "quote"} in payload["subscriptions"]
 
 
+def test_build_quote_subscription_payload_is_quote_only() -> None:
+    payload = build_quote_subscription_payload("key", ["NASDAQ:MSFT", "NASDAQ:AAPL"])
+
+    assert payload == {
+        "api_key": "key",
+        "subscriptions": [
+            {"code": "NASDAQ:AAPL", "type": "quote"},
+            {"code": "NASDAQ:MSFT", "type": "quote"},
+        ],
+    }
+
+
 def test_parse_market_message_classifies_heartbeat_quote_and_fatal_error() -> None:
     assert parse_market_message("pong").kind == "pong"
     assert parse_market_message('{"server_time":1741397070281}').kind == "heartbeat"
     assert parse_market_message('{"data":[{"code":"NASDAQ:AAPL"}]}').kind == "quote"
+    assert parse_market_message('{"code":"NASDAQ:AAPL","bid":100.0}').kind == "quote"
     error = parse_market_message('{"error":"server_busy","message":"retry"}')
 
     assert error.kind == "error"

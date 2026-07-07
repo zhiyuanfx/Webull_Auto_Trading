@@ -492,6 +492,35 @@ th {
   background: #31352d;
 }
 
+.statusStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: #4c5148;
+  font-size: 13px;
+}
+
+.statusStrip span {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #f8fafc;
+  overflow-wrap: anywhere;
+}
+
+.dark .statusStrip {
+  color: #d9ddcf;
+}
+
+.dark .statusStrip span {
+  border-color: #33362f;
+  background: #171916;
+}
+
 .streamPanel {
   max-height: 560px;
   overflow-y: auto;

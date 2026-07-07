@@ -15,7 +15,7 @@ Use the existing Conda environment that already works with the Webull SDK:
 
 ```bash
 conda activate webull-strategy-desk
-python -m pip install -e ".[dev,webull,sanity]"
+python -m pip install -e ".[dev,webull]"
 cp .env.example .env
 webull-auto-trading diagnose
 webull-auto-trading init-db
@@ -60,8 +60,10 @@ webull-auto-trading run
 webull-auto-trading cleanup --dry-run
 ```
 
-`serve` starts the local backend on <http://127.0.0.1:8765> by default. The frontend lives in
-`frontend/` and proxies `/api` to that backend during Vite development.
+`serve` starts the local backend and InsightSentry quote stream worker on
+<http://127.0.0.1:8765> by default. The API remains usable if stream credentials are missing
+or the stream is reconnecting. The frontend lives in `frontend/` and proxies `/api` to that
+backend during Vite development.
 
 ```bash
 cd frontend

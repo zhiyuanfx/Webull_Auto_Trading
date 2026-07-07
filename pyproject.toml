@@ -15,13 +15,12 @@ dependencies = [
   "PyYAML>=6.0,<7",
   "python-dotenv>=1.0,<2",
   "uvicorn>=0.32,<1",
+  "websockets>=15,<17",
 ]
 
 [project.optional-dependencies]
 webull = ["webull-openapi-python-sdk"]
-sanity = [
-  "websockets>=15,<17",
-]
+sanity = []
 dev = [
   "pytest>=8.3,<9",
   "ruff>=0.7,<1",

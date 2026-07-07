@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from functools import lru_cache
 from typing import Any
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field
 from webull_auto_trading.config import get_settings
 from webull_auto_trading.domain import RuntimeMode
 from webull_auto_trading.execution import AccountSnapshot, WebullReadService
+from webull_auto_trading.insightsentry_stream import InsightSentryQuoteStreamService
 from webull_auto_trading.runtime import RuntimeService
 
 
@@ -44,8 +46,22 @@ def get_runtime() -> RuntimeService:
     return runtime
 
 
+@lru_cache
+def get_stream_service() -> InsightSentryQuoteStreamService:
+    return InsightSentryQuoteStreamService(get_runtime())
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="Webull Auto Trading Runtime")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        stream_service = get_stream_service()
+        stream_service.start()
+        try:
+            yield
+        finally:
+            await stream_service.stop()
+
+    app = FastAPI(title="Webull Auto Trading Runtime", lifespan=lifespan)
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -116,6 +132,10 @@ def create_app() -> FastAPI:
     @app.get("/api/market/streams/symbols")
     def list_stream_symbols() -> list[dict[str, Any]]:
         return get_runtime().enabled_symbol_streams()
+
+    @app.get("/api/market/stream-status")
+    def market_stream_status() -> dict[str, Any]:
+        return get_stream_service().status()
 
     @app.get("/api/market/streams/by-symbol")
     def list_market_stream_by_symbol(symbol: str, since: int | None = None) -> list[dict[str, Any]]:

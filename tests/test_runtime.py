@@ -11,6 +11,42 @@ from webull_auto_trading.domain import (
 from webull_auto_trading.runtime import RuntimeService
 
 
+def test_runtime_merges_wrapped_and_top_level_partial_quote_updates(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    runtime.repository.upsert_strategy_instance(
+        StrategyInstance(id="st-1", strategy_name="day_many_bian", symbol="NASDAQ:AAPL")
+    )
+
+    runtime.ingest_market_message(
+        '{"last_update":1783267200000,"total_items":1,'
+        '"data":[{"code":"NASDAQ:AAPL","bid":100.0,"ask":100.1}]}'
+    )
+    runtime.ingest_market_message(
+        '{"code":"NASDAQ:AAPL","status":"OPEN","last_price":100.05,"delay_seconds":0}'
+    )
+
+    quote = runtime.current_quotes()["NASDAQ:AAPL"]
+
+    assert quote.fields["bid"] == 100.0
+    assert quote.fields["ask"] == 100.1
+    assert quote.fields["last_price"] == 100.05
+    assert quote.fields["last_update"] == 1783267200000
+    assert [item.raw for item in runtime.stream_buffer.list_for_symbol("NASDAQ:AAPL")] == [
+        {
+            "code": "NASDAQ:AAPL",
+            "bid": 100.0,
+            "ask": 100.1,
+            "last_update": 1783267200000,
+        },
+        {
+            "code": "NASDAQ:AAPL",
+            "status": "OPEN",
+            "last_price": 100.05,
+            "delay_seconds": 0,
+        },
+    ]
+
+
 def test_individual_flatten_pauses_and_closes_at_quote_side(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.repository.upsert_strategy_instance(

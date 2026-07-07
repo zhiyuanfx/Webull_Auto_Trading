@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     strategies_live_config_path: Path = Path("config/strategies.live.yml")
     quote_max_staleness_seconds: int = Field(default=30, ge=1, le=3600)
     allow_delayed_quotes: bool = False
+    insightsentry_stream_enabled: bool = True
     insightsentry_api_key: str = ""
     insightsentry_rapidapi_key: str = ""
     insightsentry_rapidapi_host: str = "insightsentry.p.rapidapi.com"

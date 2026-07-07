@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any
 
 from webull_auto_trading.config import Settings
@@ -178,18 +179,34 @@ class RuntimeService:
             message += f"; {len(summary['warnings'])} warnings"
         return message
 
-    def ingest_quote_item(self, item: dict[str, Any]) -> list[str]:
-        quote = self.quote_book.merge_quote_item(item)
+    def ingest_quote_item(
+        self,
+        item: dict[str, Any],
+        *,
+        received_at: datetime | None = None,
+    ) -> list[str]:
+        quote = self.quote_book.merge_quote_item(item, received_at=received_at)
         self.record_stream_message(quote.symbol, "quote", item)
         return self.evaluate_quote(quote)
 
-    def ingest_market_message(self, message: str) -> list[str]:
+    def ingest_market_message(
+        self,
+        message: str,
+        *,
+        received_at: datetime | None = None,
+    ) -> list[str]:
         parsed = parse_market_message(message)
         if parsed.kind == "quote" and isinstance(parsed.payload, dict):
             messages: list[str] = []
+            if "data" not in parsed.payload:
+                return self.ingest_quote_item(parsed.payload, received_at=received_at)
+            parent_last_update = parsed.payload.get("last_update")
             for item in parsed.payload.get("data", []):
                 if isinstance(item, dict):
-                    messages.extend(self.ingest_quote_item(item))
+                    quote_item = dict(item)
+                    if parent_last_update is not None and quote_item.get("last_update") is None:
+                        quote_item["last_update"] = parent_last_update
+                    messages.extend(self.ingest_quote_item(quote_item, received_at=received_at))
             return messages
         if parsed.kind == "series" and isinstance(parsed.payload, dict):
             symbol = str(parsed.payload.get("code") or "")

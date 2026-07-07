@@ -17,7 +17,7 @@ behavior changes.
 ## Test/Live multi-strategy runtime
 
 The runtime is a local Python service with SQLite persistence, a shared InsightSentry
-market-data boundary, strategy instances isolated by `strategy_instance_id`, paper virtual
+quote stream boundary, strategy instances isolated by `strategy_instance_id`, paper virtual
 orders, and a FastAPI/React operator UI. Runtime mode is global:
 
 - `test`: paper trading with real InsightSentry market data.
@@ -27,6 +27,12 @@ Strategy instances are configured from `config/strategies.test.yml` or
 `config/strategies.live.yml` based on the active mode. Strategy additions and parameter
 changes are made in source/config, not through the UI. The local API supports runtime
 pause/resume controls for configured instances.
+
+`webull-auto-trading serve` owns one background InsightSentry quote WebSocket consumer. It
+subscribes only to deduplicated enabled strategy symbols, keeps quote and raw stream display
+state in process memory, and surfaces missing credentials, idle symbols, reconnecting, and
+stream errors through a safe local status endpoint. Global pause does not stop market data
+visibility.
 
 Operator pause state is persistent. Config `enabled` seeds a new strategy ID, while the
 SQLite strategy setting remains authoritative for an existing ID. Global and per-strategy
