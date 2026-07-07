@@ -20,7 +20,7 @@ def test_sqlite_strategy_instances_survive_repository_restart(tmp_path) -> None:
     created = repo.upsert_strategy_instance(
         StrategyInstance(
             id="st-1",
-            strategy_name="day_many_bian",
+            strategy_name="recycle_buy",
             symbol="NASDAQ:AAPL",
             mode=ExecutionMode.PAPER,
             webull_symbol="AAPL",
@@ -66,7 +66,7 @@ def test_replace_strategy_instances_preserves_operator_pause(tmp_path) -> None:
     repo.upsert_strategy_instance(
         StrategyInstance(
             id="st-1",
-            strategy_name="day_many_bian",
+            strategy_name="recycle_buy",
             symbol="NASDAQ:AAPL",
             enabled=False,
         )
@@ -76,13 +76,13 @@ def test_replace_strategy_instances_preserves_operator_pause(tmp_path) -> None:
         [
             StrategyInstance(
                 id="st-1",
-                strategy_name="day_many_bian",
+                strategy_name="recycle_buy",
                 symbol="NASDAQ:AAPL",
                 enabled=True,
             ),
             StrategyInstance(
                 id="st-2",
-                strategy_name="day_many_bian",
+                strategy_name="recycle_buy",
                 symbol="NASDAQ:MSFT",
                 enabled=True,
             ),

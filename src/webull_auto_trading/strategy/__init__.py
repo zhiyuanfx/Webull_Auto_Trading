@@ -1,9 +1,4 @@
-from webull_auto_trading.strategy.day_many_bian import (
-    BracketSetup,
-    DayManyBianParams,
-    DayManyBianState,
-    DayManyBianStrategy,
-)
+from webull_auto_trading.strategy.base import Strategy
 from webull_auto_trading.strategy.recycle_buy import (
     RecycleBuyParams,
     RecycleBuyState,
@@ -11,10 +6,7 @@ from webull_auto_trading.strategy.recycle_buy import (
 )
 
 __all__ = [
-    "BracketSetup",
-    "DayManyBianParams",
-    "DayManyBianState",
-    "DayManyBianStrategy",
+    "Strategy",
     "RecycleBuyParams",
     "RecycleBuyState",
     "RecycleBuyStrategy",

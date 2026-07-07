@@ -1,0 +1,12 @@
+# Example test-mode strategy instances. Copy to strategies.test.yml for local use.
+# Real strategy names, symbols, and parameters should stay in the ignored local file.
+strategies:
+  - id: demo_recycle_buy_mgcq2026
+    strategy_name: recycle_buy
+    symbol: COMEX_MINI:MGCQ2026
+    enabled: false
+    params:
+      lots: 1.0
+      stop_loss_distance_price: 5.0
+      take_profit_distance_price: 5.0
+      cooldown_seconds: 5

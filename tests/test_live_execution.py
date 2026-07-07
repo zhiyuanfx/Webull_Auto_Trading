@@ -172,7 +172,7 @@ def test_live_adapter_requires_master_enable(tmp_path) -> None:
 def live_strategy() -> StrategyInstance:
     return StrategyInstance(
         id="st-live",
-        strategy_name="day_many_bian",
+        strategy_name="recycle_buy",
         symbol="NASDAQ:AAPL",
         market_data_symbol="NASDAQ:AAPL",
         webull_symbol="AAPL",

@@ -25,8 +25,9 @@
   rejection rules.
 - `src/webull_auto_trading/insightsentry_stream.py`: production InsightSentry quote
   WebSocket service and safe stream status.
-- `src/webull_auto_trading/strategy/day_many_bian.py`: first Python EA-style strategy port.
 - `src/webull_auto_trading/strategy/recycle_buy.py`: simple Test-mode paper recycle-buy EA.
+- `src/webull_auto_trading/strategy/`: tracks only the base interface, package init, and
+  disclosed demo strategies; real strategy modules are local/ignored.
 - `src/webull_auto_trading/order_manager.py`: virtual pending orders and paper fills.
 - `src/webull_auto_trading/api.py`: local FastAPI API for the operator UI.
 - `frontend/`: local React/Vite operator console.
@@ -51,6 +52,8 @@ placement into runtime decisions without an explicit safety plan and user reques
 - Market quote/series display is process-memory only; do not persist new quote or bar data.
 - There is no external-alert intake, local simulator, alternate trading environment, or live
   order worker in this baseline.
+- Real strategy modules and real strategy config files are local/ignored. Keep examples
+  tracked, then copy them to ignored local files before operating the runtime.
 - Keep trading logic separate from market-data logic when future runtime code is added.
 
 ## Commands

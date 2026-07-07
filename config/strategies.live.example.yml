@@ -1,0 +1,12 @@
+# Example live-mode strategy skeleton. Copy to strategies.live.yml for local use.
+# Keep live_execution_enabled false until the live execution safety path is complete.
+strategies:
+  - id: live_example_strategy
+    strategy_name: your_private_strategy
+    market_data_symbol: EXCHANGE:SYMBOL
+    webull_symbol: SYMBOL
+    account_alias: stock_margin
+    asset_class: stock
+    enabled: false
+    live_execution_enabled: false
+    params: {}

@@ -79,7 +79,7 @@ def test_diagnose_live_payload_reports_alias_names_without_account_ids(tmp_path:
         """
 strategies:
   - id: live-aapl
-    strategy_name: day_many_bian
+    strategy_name: recycle_buy
     market_data_symbol: NASDAQ:AAPL
     webull_symbol: AAPL
     account_alias: stock_margin

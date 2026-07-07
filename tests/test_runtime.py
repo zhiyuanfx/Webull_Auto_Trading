@@ -1,3 +1,6 @@
+import sys
+import types
+
 from webull_auto_trading.config import Settings
 from webull_auto_trading.domain import (
     OrderRole,
@@ -8,13 +11,15 @@ from webull_auto_trading.domain import (
     StrategyInstance,
     new_id,
 )
+from webull_auto_trading.order_manager import PaperOrderBook
 from webull_auto_trading.runtime import RuntimeService
+from webull_auto_trading.strategy.base import Strategy
 
 
 def test_runtime_merges_wrapped_and_top_level_partial_quote_updates(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.repository.upsert_strategy_instance(
-        StrategyInstance(id="st-1", strategy_name="day_many_bian", symbol="NASDAQ:AAPL")
+        StrategyInstance(id="st-1", strategy_name="recycle_buy", symbol="NASDAQ:AAPL")
     )
 
     runtime.ingest_market_message(
@@ -50,7 +55,7 @@ def test_runtime_merges_wrapped_and_top_level_partial_quote_updates(tmp_path) ->
 def test_individual_flatten_pauses_and_closes_at_quote_side(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.repository.upsert_strategy_instance(
-        StrategyInstance(id="st-1", strategy_name="day_many_bian", symbol="NASDAQ:AAPL")
+        StrategyInstance(id="st-1", strategy_name="recycle_buy", symbol="NASDAQ:AAPL")
     )
     runtime.order_book.orders = [
         PaperOrder(
@@ -81,7 +86,7 @@ def test_individual_flatten_pauses_and_closes_at_quote_side(tmp_path) -> None:
 def test_flatten_reports_missing_quote_without_inventing_close_price(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.repository.upsert_strategy_instance(
-        StrategyInstance(id="st-1", strategy_name="day_many_bian", symbol="NASDAQ:AAPL")
+        StrategyInstance(id="st-1", strategy_name="recycle_buy", symbol="NASDAQ:AAPL")
     )
     runtime.order_book.orders = [
         PaperOrder(
@@ -108,7 +113,7 @@ def test_flatten_reports_missing_quote_without_inventing_close_price(tmp_path) -
 def test_global_flatten_sets_global_pause(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.repository.upsert_strategy_instance(
-        StrategyInstance(id="st-1", strategy_name="day_many_bian", symbol="NASDAQ:AAPL")
+        StrategyInstance(id="st-1", strategy_name="recycle_buy", symbol="NASDAQ:AAPL")
     )
 
     summary = runtime.flatten_all_strategies()
@@ -121,7 +126,7 @@ def test_live_mode_rejects_flatten(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.repository.set_runtime_mode(RuntimeMode.LIVE)
     runtime.repository.upsert_strategy_instance(
-        StrategyInstance(id="st-1", strategy_name="day_many_bian", symbol="NASDAQ:AAPL")
+        StrategyInstance(id="st-1", strategy_name="recycle_buy", symbol="NASDAQ:AAPL")
     )
 
     try:
@@ -136,11 +141,11 @@ def test_enabled_symbol_streams_are_deduplicated(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.repository.seed_strategy_instances(
         [
-            StrategyInstance(id="st-1", strategy_name="day_many_bian", symbol="NASDAQ:AAPL"),
-            StrategyInstance(id="st-2", strategy_name="day_many_bian", symbol="NASDAQ:AAPL"),
+            StrategyInstance(id="st-1", strategy_name="recycle_buy", symbol="NASDAQ:AAPL"),
+            StrategyInstance(id="st-2", strategy_name="recycle_buy", symbol="NASDAQ:AAPL"),
             StrategyInstance(
                 id="st-3",
-                strategy_name="day_many_bian",
+                strategy_name="recycle_buy",
                 symbol="NASDAQ:MSFT",
                 enabled=False,
             ),
@@ -154,6 +159,53 @@ def test_enabled_symbol_streams_are_deduplicated(tmp_path) -> None:
             "strategy_count": 2,
         }
     ]
+
+
+def test_runtime_resolves_builtin_recycle_buy_strategy(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+
+    assert runtime.resolve_strategy("recycle_buy") is runtime.strategies["recycle_buy"]
+
+
+def test_runtime_resolves_private_strategy_module_by_name(tmp_path, monkeypatch) -> None:
+    module = types.ModuleType("webull_auto_trading.strategy.private_alpha")
+
+    class PrivateAlphaStrategy(Strategy):
+        def on_quote(
+            self,
+            instance: StrategyInstance,
+            quote,
+            order_book: PaperOrderBook,
+        ) -> list[str]:
+            return [f"private:{instance.id}:{quote.symbol}:{len(order_book.orders)}"]
+
+    module.PrivateAlphaStrategy = PrivateAlphaStrategy
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    runtime = make_runtime(tmp_path)
+    runtime.repository.upsert_strategy_instance(
+        StrategyInstance(id="st-private", strategy_name="private_alpha", symbol="NASDAQ:AAPL")
+    )
+
+    messages = runtime.ingest_quote_item(
+        {"code": "NASDAQ:AAPL", "bid": 100, "ask": 101, "last_price": 100.5, "delay_seconds": 0}
+    )
+
+    assert messages == ["private:st-private:NASDAQ:AAPL:0"]
+    assert runtime.resolve_strategy("private_alpha") is runtime.strategies["private_alpha"]
+
+
+def test_runtime_skips_missing_private_strategy_without_trading(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    runtime.repository.upsert_strategy_instance(
+        StrategyInstance(id="st-missing", strategy_name="missing_private", symbol="NASDAQ:AAPL")
+    )
+
+    messages = runtime.ingest_quote_item(
+        {"code": "NASDAQ:AAPL", "bid": 100, "ask": 101, "last_price": 100.5, "delay_seconds": 0}
+    )
+
+    assert messages == ["Unknown strategy: missing_private"]
+    assert runtime.order_book.orders == []
 
 
 def make_runtime(tmp_path) -> RuntimeService:

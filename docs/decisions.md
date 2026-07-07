@@ -23,10 +23,11 @@ orders, and a FastAPI/React operator UI. Runtime mode is global:
 - `test`: paper trading with real InsightSentry market data.
 - `live`: Webull account reads and live strategy configuration only; execution is disabled.
 
-Strategy instances are configured from `config/strategies.test.yml` or
-`config/strategies.live.yml` based on the active mode. Strategy additions and parameter
-changes are made in source/config, not through the UI. The local API supports runtime
-pause/resume controls for configured instances.
+Strategy instances are configured from ignored local files, `config/strategies.test.yml` or
+`config/strategies.live.yml`, based on the active mode. Tracked `.example.yml` files show
+safe demo/skeleton configuration only. Strategy additions and parameter changes are made in
+local source/config, not through the UI. The local API supports runtime pause/resume controls
+for configured instances.
 
 `webull-auto-trading serve` owns one background InsightSentry quote WebSocket consumer. It
 subscribes only to deduplicated enabled strategy symbols, keeps quote and raw stream display
@@ -40,13 +41,14 @@ flatten controls are paper-only: they pause execution, cancel virtual pending or
 close paper positions only when an in-memory current quote provides the documented paper
 close side. Live mode rejects flatten because live execution is disabled.
 
-The first ported strategy is `day_many_bian`, modeled as a Python state machine with daily
-brackets, reverse-buffer entries after the first cycle, trailing stop updates, optional
-pyramiding, cooldown, max-cycle, and daily-loss controls.
+The tracked public strategy package includes `recycle_buy`, a deliberately small paper-only
+helper EA that opens an immediate BUY on each valid quote, attaches fixed stop-loss/take-
+profit distances, and waits for a configured cooldown after the position closes before
+opening again.
 
-Test mode also includes `recycle_buy`, a deliberately small paper-only helper EA that opens
-an immediate BUY on each valid quote, attaches fixed stop-loss/take-profit distances, and
-waits for a configured cooldown after the position closes before opening again.
+Real strategy modules live next to the tracked demo strategy but are ignored by git. The
+runtime resolves private strategies by importing `webull_auto_trading.strategy.<name>` and
+looking for a PascalCase `<Name>Strategy` class.
 
 ## Secret and credential handling
 

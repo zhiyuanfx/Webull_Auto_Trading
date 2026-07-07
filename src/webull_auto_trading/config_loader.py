@@ -26,7 +26,7 @@ def _instance_from_config(item: dict[str, Any]) -> StrategyInstance:
     market_data_symbol = str(item.get("market_data_symbol") or item.get("symbol") or "")
     return StrategyInstance(
         id=str(item.get("id") or new_id("st")),
-        strategy_name=str(item.get("strategy_name") or "day_many_bian"),
+        strategy_name=str(item.get("strategy_name") or "recycle_buy"),
         symbol=market_data_symbol,
         account_id=str(item.get("account_id") or ""),
         enabled=bool(item.get("enabled", True)),

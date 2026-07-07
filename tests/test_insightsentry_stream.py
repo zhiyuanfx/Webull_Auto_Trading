@@ -44,7 +44,7 @@ def test_stream_sends_quote_only_subscription_and_ingests_top_level_quote(tmp_pa
     async def scenario() -> None:
         runtime = make_runtime(tmp_path, insightsentry_api_key="direct-key")
         runtime.repository.upsert_strategy_instance(
-            StrategyInstance(id="st-1", strategy_name="day_many_bian", symbol="NASDAQ:AAPL")
+            StrategyInstance(id="st-1", strategy_name="recycle_buy", symbol="NASDAQ:AAPL")
         )
         socket = MockWebSocket(
             [
@@ -89,7 +89,7 @@ def test_stream_rejects_expired_cached_websocket_key(tmp_path) -> None:
             ).isoformat(),
         )
         runtime.repository.upsert_strategy_instance(
-            StrategyInstance(id="st-1", strategy_name="day_many_bian", symbol="NASDAQ:AAPL")
+            StrategyInstance(id="st-1", strategy_name="recycle_buy", symbol="NASDAQ:AAPL")
         )
         service = InsightSentryQuoteStreamService(runtime, poll_seconds=0.01)
 

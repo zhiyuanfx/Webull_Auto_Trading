@@ -79,9 +79,17 @@ npm install
 npm run dev
 ```
 
-Mode-specific strategy configs live in `config/strategies.test.yml` and
-`config/strategies.live.yml`. Add strategies there, not through the UI. They are disabled by
-default and contain no secrets.
+Mode-specific strategy configs are ignored local files. Start from the tracked examples:
+
+```bash
+cp config/strategies.test.example.yml config/strategies.test.yml
+cp config/strategies.live.example.yml config/strategies.live.yml
+```
+
+Add real strategies there, not through the UI. Keep real symbols, private strategy names,
+and tuned parameters out of git. The tracked public strategy package includes only the base
+interface, package init, and the disclosed `recycle_buy` demo; private strategy modules can
+live beside it as ignored local files.
 
 ## Verification
 

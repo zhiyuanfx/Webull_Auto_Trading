@@ -14,6 +14,8 @@ htmlcov/
 data/
 .runtime/
 recordings/
+config/*.yml
+!config/*.example.yml
 *.tsbuildinfo
 frontend/node_modules/
 frontend/dist/

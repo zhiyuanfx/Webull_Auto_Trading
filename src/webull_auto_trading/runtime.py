@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any
@@ -17,7 +18,7 @@ from webull_auto_trading.market_data import (
 from webull_auto_trading.order_manager import PaperOrderBook
 from webull_auto_trading.persistence import RuntimeRepository
 from webull_auto_trading.risk import RiskController
-from webull_auto_trading.strategy.day_many_bian import DayManyBianStrategy
+from webull_auto_trading.strategy.base import Strategy
 from webull_auto_trading.strategy.recycle_buy import RecycleBuyStrategy
 
 
@@ -29,10 +30,7 @@ class RuntimeService:
         self.stream_buffer = MarketStreamBuffer(max_messages=20)
         self.order_book = PaperOrderBook()
         self.risk = RiskController()
-        self.strategies = {
-            "day_many_bian": DayManyBianStrategy(),
-            "recycle_buy": RecycleBuyStrategy(),
-        }
+        self.strategies: dict[str, Strategy] = {"recycle_buy": RecycleBuyStrategy()}
 
     def initialize(self, *, seed_config: bool = True) -> None:
         self.repository.init_db()
@@ -290,7 +288,7 @@ class RuntimeService:
             if not decision.allowed:
                 messages.append(decision.reason)
                 continue
-            strategy = self.strategies.get(instance.strategy_name)
+            strategy = self.resolve_strategy(instance.strategy_name)
             if strategy is None:
                 message = f"Unknown strategy: {instance.strategy_name}"
                 self.repository.log_activity(
@@ -316,6 +314,27 @@ class RuntimeService:
             market_prices=self.current_market_prices(),
         )
         return messages
+
+    def resolve_strategy(self, strategy_name: str) -> Strategy | None:
+        strategy = self.strategies.get(strategy_name)
+        if strategy is not None:
+            return strategy
+        module_name = f"webull_auto_trading.strategy.{strategy_name}"
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            return None
+        strategy_type = getattr(module, _strategy_class_name(strategy_name), None)
+        if strategy_type is None:
+            return None
+        try:
+            strategy = strategy_type()
+        except Exception:
+            return None
+        if not isinstance(strategy, Strategy):
+            return None
+        self.strategies[strategy_name] = strategy
+        return strategy
 
     def current_market_prices(self) -> dict[str, float]:
         prices: dict[str, float] = {}
@@ -350,3 +369,7 @@ class RuntimeService:
             "orders": [asdict(item) for item in self.order_book.orders],
             "fills": [asdict(item) for item in self.order_book.fills],
         }
+
+
+def _strategy_class_name(strategy_name: str) -> str:
+    return "".join(part.capitalize() for part in strategy_name.split("_")) + "Strategy"

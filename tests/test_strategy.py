@@ -12,12 +12,6 @@ from webull_auto_trading.domain import (
 )
 from webull_auto_trading.order_manager import PaperOrderBook
 from webull_auto_trading.risk import daily_loss_limit_hit
-from webull_auto_trading.strategy.day_many_bian import (
-    DayManyBianParams,
-    DayManyBianState,
-    active_trailing_distance,
-    select_fresh_entry_bracket,
-)
 from webull_auto_trading.strategy.recycle_buy import RecycleBuyStrategy
 
 
@@ -35,40 +29,6 @@ def quote(symbol: str, bid: float, ask: float) -> QuoteState:
         },
         received_at=now,
     )
-
-
-def test_strategy_selects_original_yesterday_bracket() -> None:
-    params = DayManyBianParams(bracket_buffer_price=0.25)
-    state = DayManyBianState(yesterday_high=110, yesterday_low=100)
-
-    setup = select_fresh_entry_bracket(params, state, quote("NASDAQ:AAPL", 104, 106))
-
-    assert setup.entry_type == "both"
-    assert setup.upper == 110.25
-    assert setup.lower == 99.75
-
-
-def test_reverse_buffer_rejects_outside_middle_zone_after_first_cycle() -> None:
-    params = DayManyBianParams(reverse_buffer_price=2, bracket_buffer_price=0.1)
-    state = DayManyBianState(yesterday_high=110, yesterday_low=100, cycle_count_today=1)
-
-    setup = select_fresh_entry_bracket(params, state, quote("NASDAQ:AAPL", 110.5, 111.0))
-
-    assert setup.entry_type == "none"
-    assert "outside" in setup.reason
-
-
-def test_dynamic_trailing_distance_shrinks_to_minimum() -> None:
-    params = DayManyBianParams(
-        take_profit_distance_price=10,
-        trailing_stop_distance_price=15,
-        dynamic_trailing_step_price=4,
-        dynamic_trailing_distance_reduction=2,
-        min_dynamic_trailing_loss_distance=7,
-    )
-
-    assert active_trailing_distance(params, OrderSide.BUY, 100, 110) == 15
-    assert active_trailing_distance(params, OrderSide.BUY, 100, 126) == 7
 
 
 def test_virtual_pending_order_fills_on_bid_ask_crossing() -> None:
@@ -194,7 +154,7 @@ def test_global_vs_instance_daily_loss_lock_logic() -> None:
 def test_strategy_instance_model_uses_paper_mode() -> None:
     instance = StrategyInstance(
         id="st-1",
-        strategy_name="day_many_bian",
+        strategy_name="recycle_buy",
         symbol="NASDAQ:AAPL",
         mode=ExecutionMode.PAPER,
     )
