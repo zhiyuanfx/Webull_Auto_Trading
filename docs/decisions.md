@@ -3,8 +3,8 @@
 ## Legacy bridge removed
 
 The old external-alert bridge has been removed from the project. The repo is being reset for
-Python-native strategies that consume InsightSentry streaming data and use Webull only for
-read-only live account operations in the current runtime.
+Python-native strategies that consume InsightSentry streaming data and use Webull for
+live account operations and gated market-order execution.
 
 ## Minimal Webull foundation
 
@@ -21,7 +21,7 @@ quote stream boundary, strategy instances isolated by `strategy_instance_id`, pa
 orders, and a FastAPI/React operator UI. Runtime mode is global:
 
 - `test`: paper trading with real InsightSentry market data.
-- `live`: Webull account reads and live strategy configuration only; execution is disabled.
+- `live`: Webull account reads plus gated live market-order execution.
 
 Strategy instances are configured from ignored local files, `config/strategies.test.yml` or
 `config/strategies.live.yml`, based on the active mode. Tracked `.example.yml` files show
@@ -39,7 +39,8 @@ Operator pause state is persistent. Config `enabled` seeds a new strategy ID, wh
 SQLite strategy setting remains authoritative for an existing ID. Global and per-strategy
 flatten controls are paper-only: they pause execution, cancel virtual pending orders, and
 close paper positions only when an in-memory current quote provides the documented paper
-close side. Live mode rejects flatten because live execution is disabled.
+close side. Live mode rejects broad flatten; live exits are produced by the same gated
+strategy close path that submits Webull market orders.
 
 The tracked public strategy package includes `recycle_buy`, a deliberately small paper-only
 helper EA that opens an immediate BUY on each valid quote, attaches fixed stop-loss/take-
@@ -70,17 +71,18 @@ sanitization, quote merging/rejection, daily-bar bootstrap, paper order fills, s
 bracket logic, per-instance isolation, runtime mode switching, paper account persistence,
 and storage cleanup. They must not call Webull, InsightSentry, or submit live orders.
 
-## Live execution scaffolding, no runtime transmission
+## Gated live execution
 
-Live mode now stores explicit live execution metadata on strategy instances, supports named
-Webull account aliases from `.env`, and persists live order intents plus reconciliation
-events. The live adapter can build the documented Webull market order shape and persist an
-intent before submission, but strategy quote evaluation still does not call that adapter.
+Live mode stores explicit live execution metadata on strategy instances, supports named
+Webull account aliases from `.env`, persists live order intents plus reconciliation events,
+and uses InsightSentry quote-driven strategy decisions to submit Webull market orders only
+after all gates pass.
 
-No runtime path transmits live orders yet. Any future wiring must keep Webull as account and
-order truth, use deterministic client order IDs, block duplicate in-flight actions, and pass
-runtime mode, master switch, per-strategy live execution, quote freshness, account alias,
-symbol, and reconciliation gates before submitting.
+The runtime keeps Webull as account and order truth, uses deterministic client order IDs,
+blocks duplicate in-flight actions, and requires runtime mode, master switch, per-strategy
+live execution, quote freshness, account alias, symbol, and reconciliation gates before
+submitting. Live SL/TP/trailing state is virtual in the backend; opens and closes transmit
+as market orders only.
 
 ## Volatile market display
 

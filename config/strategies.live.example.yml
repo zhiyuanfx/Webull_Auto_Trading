@@ -1,5 +1,5 @@
 # Example live-mode strategy skeleton. Copy to strategies.live.yml for local use.
-# Keep live_execution_enabled false until the live execution safety path is complete.
+# Keep live_execution_enabled false until the strategy and env master switch are ready.
 strategies:
   - id: live_example_strategy
     strategy_name: your_private_strategy

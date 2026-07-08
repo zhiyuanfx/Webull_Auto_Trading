@@ -225,6 +225,25 @@ class RuntimeRepository:
                     payload_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS live_virtual_orders (
+                    id TEXT PRIMARY KEY,
+                    strategy_instance_id TEXT NOT NULL,
+                    cycle_id TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    stop_price REAL,
+                    fill_price REAL,
+                    stop_loss REAL,
+                    take_profit REAL,
+                    parent_order_id TEXT,
+                    opened_at TEXT,
+                    closed_at TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._ensure_strategy_live_columns(conn)
@@ -379,6 +398,7 @@ class RuntimeRepository:
             "bars",
             "live_order_intents",
             "live_reconciliation_events",
+            "live_virtual_orders",
         }:
             raise ValueError(f"Unsupported table: {table}")
         with self.connect() as conn:
@@ -533,6 +553,47 @@ class RuntimeRepository:
         with self.connect() as conn:
             rows = conn.execute("SELECT * FROM fills ORDER BY filled_at, id").fetchall()
         return [self._paper_fill_from_row(row) for row in rows]
+
+    def list_live_virtual_orders(self) -> list[PaperOrder]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM live_virtual_orders ORDER BY updated_at, id"
+            ).fetchall()
+        return [self._paper_order_from_row(row) for row in rows]
+
+    def sync_live_virtual_state(self, orders: Iterable[PaperOrder]) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM live_virtual_orders")
+            for order in orders:
+                conn.execute(
+                    """
+                    INSERT INTO live_virtual_orders(
+                        id, strategy_instance_id, cycle_id, symbol, side, role, status, quantity,
+                        stop_price, fill_price, stop_loss, take_profit, parent_order_id,
+                        opened_at, closed_at, metadata_json, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        order.id,
+                        order.strategy_instance_id,
+                        order.cycle_id,
+                        order.symbol,
+                        order.side.value,
+                        order.role.value if isinstance(order.role, OrderRole) else str(order.role),
+                        order.status.value,
+                        order.quantity,
+                        order.stop_price,
+                        order.fill_price,
+                        order.stop_loss,
+                        order.take_profit,
+                        order.parent_order_id,
+                        iso(order.opened_at) if order.opened_at else None,
+                        iso(order.closed_at) if order.closed_at else None,
+                        encode_json(order.metadata),
+                        iso(),
+                    ),
+                )
 
     def upsert_live_order_intent(self, intent: LiveOrderIntent) -> LiveOrderIntent:
         intent.updated_at = utc_now()
@@ -852,6 +913,7 @@ class RuntimeRepository:
             "activity",
             "live_order_intents",
             "live_reconciliation_events",
+            "live_virtual_orders",
         ]
         with self.connect() as conn:
             counts = {

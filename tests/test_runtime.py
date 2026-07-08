@@ -3,6 +3,7 @@ import types
 
 from webull_auto_trading.config import Settings
 from webull_auto_trading.domain import (
+    LiveIntentStatus,
     OrderRole,
     OrderSide,
     OrderStatus,
@@ -14,6 +15,7 @@ from webull_auto_trading.domain import (
 from webull_auto_trading.order_manager import PaperOrderBook
 from webull_auto_trading.runtime import RuntimeService
 from webull_auto_trading.strategy.base import Strategy
+from webull_auto_trading.webull import WebullError
 
 
 def test_runtime_merges_wrapped_and_top_level_partial_quote_updates(tmp_path) -> None:
@@ -208,6 +210,48 @@ def test_runtime_skips_missing_private_strategy_without_trading(tmp_path) -> Non
     assert runtime.order_book.orders == []
 
 
+def test_live_quote_submits_open_and_virtual_close_market_orders(tmp_path) -> None:
+    client = FakeLiveOrderClient()
+    runtime = make_live_runtime(tmp_path, client)
+    runtime.repository.upsert_strategy_instance(live_strategy())
+
+    runtime.ingest_quote_item(
+        {"code": "NASDAQ:AAPL", "bid": 100, "ask": 101, "last_price": 100.5, "delay_seconds": 0}
+    )
+    first_intent = runtime.repository.list_live_order_intents()[0]
+    first_intent.status = LiveIntentStatus.FILLED
+    runtime.repository.upsert_live_order_intent(first_intent)
+    runtime.ingest_quote_item(
+        {"code": "NASDAQ:AAPL", "bid": 106, "ask": 107, "last_price": 106.5, "delay_seconds": 0}
+    )
+
+    assert [order["side"] for _account_id, order in client.orders] == ["BUY", "SELL"]
+    assert all(order["order_type"] == "MARKET" for _account_id, order in client.orders)
+    assert all(account_id == "acct-1" for account_id, _order in client.orders)
+    assert [intent.action.value for intent in runtime.repository.list_live_order_intents()] == [
+        "CLOSE_MARKET",
+        "OPEN_MARKET",
+    ]
+    assert runtime.repository.list_live_virtual_orders()[0].status == OrderStatus.CLOSED
+
+
+def test_live_order_rejection_pauses_strategy(tmp_path) -> None:
+    runtime = make_live_runtime(tmp_path, RejectingLiveOrderClient())
+    runtime.repository.upsert_strategy_instance(live_strategy())
+
+    runtime.ingest_quote_item(
+        {"code": "NASDAQ:AAPL", "bid": 100, "ask": 101, "last_price": 100.5, "delay_seconds": 0}
+    )
+
+    instance = runtime.repository.list_strategy_instances()[0]
+    intent = runtime.repository.list_live_order_intents()[0]
+    virtual_order = runtime.repository.list_live_virtual_orders()[0]
+    assert instance.enabled is False
+    assert intent.status == LiveIntentStatus.REJECTED
+    assert virtual_order.status == OrderStatus.CANCELLED
+    assert virtual_order.metadata["live_status"] == "REJECTED"
+
+
 def make_runtime(tmp_path) -> RuntimeService:
     runtime = RuntimeService(
         Settings(
@@ -218,3 +262,54 @@ def make_runtime(tmp_path) -> RuntimeService:
     )
     runtime.initialize(seed_config=False)
     return runtime
+
+
+def make_live_runtime(tmp_path, client) -> RuntimeService:
+    runtime = RuntimeService(
+        Settings(
+            runtime_db_path=tmp_path / "runtime.sqlite3",
+            strategies_test_config_path=tmp_path / "strategies.test.yml",
+            strategies_live_config_path=tmp_path / "strategies.live.yml",
+            webull_account_stock_margin_id="acct-1",
+            live_execution_master_enable=True,
+            _env_file=None,
+        ),
+        live_order_client=client,
+    )
+    runtime.initialize(seed_config=False)
+    runtime.repository.set_runtime_mode(RuntimeMode.LIVE)
+    return runtime
+
+
+def live_strategy() -> StrategyInstance:
+    return StrategyInstance(
+        id="st-live",
+        strategy_name="recycle_buy",
+        symbol="NASDAQ:AAPL",
+        market_data_symbol="NASDAQ:AAPL",
+        webull_symbol="AAPL",
+        account_alias="stock_margin",
+        asset_class="stock",
+        enabled=True,
+        live_execution_enabled=True,
+        params={
+            "lots": 1,
+            "stop_loss_distance_price": 5,
+            "take_profit_distance_price": 5,
+            "cooldown_seconds": 5,
+        },
+    )
+
+
+class FakeLiveOrderClient:
+    def __init__(self) -> None:
+        self.orders: list[tuple[str, dict[str, str]]] = []
+
+    async def place_order(self, account_id: str, order: dict[str, str]) -> dict[str, str]:
+        self.orders.append((account_id, order))
+        return {"client_order_id": order["client_order_id"], "order_id": f"wb-{len(self.orders)}"}
+
+
+class RejectingLiveOrderClient:
+    async def place_order(self, account_id: str, order: dict[str, str]) -> dict[str, str]:
+        raise WebullError("REJECTED", "order rejected")

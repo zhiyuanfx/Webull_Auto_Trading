@@ -39,6 +39,11 @@ type StrategyInstance = {
   symbol: string;
   account_id: string;
   enabled: boolean;
+  market_data_symbol: string;
+  webull_symbol: string;
+  account_alias: string;
+  asset_class: string;
+  live_execution_enabled: boolean;
   params: Record<string, unknown>;
 };
 
@@ -46,13 +51,29 @@ type AccountPayload = {
   mode?: RuntimeMode;
   message?: string;
   configured?: boolean;
-  account_id?: string;
+  account_alias?: string;
+  account_id_configured?: boolean;
   balance?: Record<string, unknown>;
   positions?: Record<string, unknown>[];
   open_orders?: Record<string, unknown>[];
   error?: string;
   paper_account?: Record<string, unknown>;
   history?: Record<string, unknown>[];
+};
+
+type AccountAlias = {
+  alias: string;
+  configured: boolean;
+  account_type?: string;
+  accountType?: string;
+  account_label?: string;
+  account_class?: string;
+};
+
+type AccountAliasesPayload = {
+  default_alias: string;
+  aliases: AccountAlias[];
+  legacy_account_id_configured: boolean;
 };
 
 type ActivityRow = {
@@ -125,6 +146,7 @@ const dictionary = {
       fills: "Fills",
       last_price: "Last price",
       level: "Level",
+      live_execution_enabled: "Live execution",
       market_price: "Market price",
       max_drawdown: "Max drawdown",
       message: "Message",
@@ -144,6 +166,9 @@ const dictionary = {
       stop_price: "Stop price",
       strategy_name: "Strategy",
       symbol: "Symbol",
+      account_alias: "Account alias",
+      asset_class: "Asset class",
+      webull_symbol: "Webull symbol",
       total_asset_currency: "Total asset currency",
       total_cash_balance: "Total cash balance",
       total_day_profit_loss: "Day P&L",
@@ -171,14 +196,14 @@ const dictionary = {
     globalResume: "Global Resume",
     warnings: "Warnings",
     live: "Live",
-    liveSafety: "Live mode: Webull reads enabled, live execution disabled",
-    liveFlattenDisabled: "Live execution disabled",
+    liveFlattenDisabled: "Live flatten is not available",
     market: "Market Data",
     lastUpdated: "Last updated",
     noActivity: "No activity",
     noMessages: "No stream messages",
     noOrders: "No paper orders",
     noRows: "No rows",
+    off: "Off",
     orders: "Orders",
     pause: "Pause",
     pausing: "Pausing...",
@@ -187,6 +212,7 @@ const dictionary = {
     recentIssues: "Recent Issues",
     refresh: "Refresh",
     refreshWebull: "Refresh Webull Reads",
+    selectAccount: "Account",
     reset: "Reset",
     resume: "Resume",
     resuming: "Resuming...",
@@ -246,6 +272,7 @@ const dictionary = {
       fills: "成交",
       last_price: "最新价",
       level: "级别",
+      live_execution_enabled: "实盘执行",
       market_price: "市场价格",
       max_drawdown: "最大回撤",
       message: "消息",
@@ -265,6 +292,9 @@ const dictionary = {
       stop_price: "止损触发价",
       strategy_name: "策略",
       symbol: "标的",
+      account_alias: "账户别名",
+      asset_class: "资产类别",
+      webull_symbol: "Webull 标的",
       total_asset_currency: "资产币种",
       total_cash_balance: "总现金余额",
       total_day_profit_loss: "当日盈亏",
@@ -292,14 +322,14 @@ const dictionary = {
     globalResume: "全局恢复",
     warnings: "警告",
     live: "实盘",
-    liveSafety: "实盘模式：允许 Webull 读取，禁止实盘执行",
-    liveFlattenDisabled: "实盘执行已禁用",
+    liveFlattenDisabled: "实盘平仓暂不可用",
     market: "市场数据",
     lastUpdated: "上次刷新",
     noActivity: "暂无活动",
     noMessages: "暂无流消息",
     noOrders: "暂无纸面订单",
     noRows: "暂无数据",
+    off: "关闭",
     orders: "订单",
     pause: "暂停",
     pausing: "暂停中...",
@@ -308,6 +338,7 @@ const dictionary = {
     recentIssues: "近期问题",
     refresh: "刷新",
     refreshWebull: "刷新 Webull 读取",
+    selectAccount: "账户",
     reset: "重置",
     resume: "恢复",
     resuming: "恢复中...",
@@ -355,6 +386,10 @@ function App() {
   const [orders, setOrders] = useState<Record<string, unknown>[]>([]);
   const [cycles, setCycles] = useState<Record<string, unknown>[]>([]);
   const [account, setAccount] = useState<AccountPayload | null>(null);
+  const [accountAliases, setAccountAliases] = useState<AccountAliasesPayload | null>(null);
+  const [selectedAccountAlias, setSelectedAccountAlias] = useState(
+    () => localStorage.getItem("liveAccountAlias") || ""
+  );
   const [activity, setActivity] = useState<ActivityRow[]>([]);
   const [storage, setStorage] = useState<Record<string, unknown> | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -377,13 +412,26 @@ function App() {
   async function refresh() {
     setRefreshing(true);
     try {
-      const [healthRes, strategiesRes, ordersRes, cyclesRes, accountRes, activityRes, storageRes] =
+      const accountQuery = selectedAccountAlias
+        ? `?account_alias=${encodeURIComponent(selectedAccountAlias)}`
+        : "";
+      const [
+        healthRes,
+        strategiesRes,
+        ordersRes,
+        cyclesRes,
+        accountRes,
+        aliasesRes,
+        activityRes,
+        storageRes
+      ] =
         await Promise.all([
           fetch("/api/health"),
           fetch("/api/strategies"),
           fetch("/api/orders"),
           fetch("/api/cycles"),
-          fetch("/api/account"),
+          fetch(`/api/account${accountQuery}`),
+          fetch("/api/webull/account-aliases"),
           fetch("/api/activity"),
           fetch("/api/storage/stats")
         ]);
@@ -392,6 +440,12 @@ function App() {
       setOrders(await ordersRes.json());
       setCycles(await cyclesRes.json());
       setAccount(await accountRes.json());
+      const aliasesPayload = (await aliasesRes.json()) as AccountAliasesPayload;
+      setAccountAliases(aliasesPayload);
+      if (!selectedAccountAlias && aliasesPayload.default_alias) {
+        setSelectedAccountAlias(aliasesPayload.default_alias);
+        localStorage.setItem("liveAccountAlias", aliasesPayload.default_alias);
+      }
       setActivity(await activityRes.json());
       setStorage(await storageRes.json());
       setLastUpdatedAt(new Date());
@@ -418,10 +472,16 @@ function App() {
   }, [lang]);
 
   useEffect(() => {
+    if (selectedAccountAlias) {
+      localStorage.setItem("liveAccountAlias", selectedAccountAlias);
+    }
+  }, [selectedAccountAlias]);
+
+  useEffect(() => {
     void refresh();
     const handle = window.setInterval(() => void refresh(), 5000);
     return () => window.clearInterval(handle);
-  }, []);
+  }, [selectedAccountAlias]);
 
   const activeContent = useMemo(() => {
     switch (tab) {
@@ -432,7 +492,17 @@ function App() {
       case "orders":
         return <Orders orders={orders} cycles={cycles} t={t} />;
       case "account":
-        return <Account account={account} onAccount={setAccount} refresh={refresh} t={t} />;
+        return (
+          <Account
+            account={account}
+            aliases={accountAliases}
+            selectedAlias={selectedAccountAlias}
+            onSelectedAlias={setSelectedAccountAlias}
+            onAccount={setAccount}
+            refresh={refresh}
+            t={t}
+          />
+        );
       case "storage":
         return <StoragePanel storage={storage} onChanged={refresh} t={t} />;
       case "activity":
@@ -446,7 +516,7 @@ function App() {
           />
         );
     }
-  }, [tab, health, strategies, orders, cycles, account, activity, storage, t]);
+  }, [tab, health, strategies, orders, cycles, account, accountAliases, selectedAccountAlias, activity, storage, t]);
 
   const refreshTitle = lastUpdatedAt
     ? `${t.lastUpdated} ${lastUpdatedAt.toLocaleTimeString()}`
@@ -738,6 +808,7 @@ function Strategies({
       <Table
         rows={strategies.map((strategy) => ({
           ...strategy,
+          live_execution_enabled: strategy.live_execution_enabled ? t.enabled : t.off,
           status: statusFor(strategy),
           action: (
             <div className="rowActions">
@@ -759,7 +830,20 @@ function Strategies({
             </div>
           )
         }))}
-        columns={["symbol", "strategy_name", "status", "action"]}
+        columns={
+          liveMode
+            ? [
+                "symbol",
+                "strategy_name",
+                "status",
+                "account_alias",
+                "asset_class",
+                "webull_symbol",
+                "live_execution_enabled",
+                "action"
+              ]
+            : ["symbol", "strategy_name", "status", "action"]
+        }
         empty={t.noRows}
         t={t}
       />
@@ -939,19 +1023,33 @@ function Orders({
 
 function Account({
   account,
+  aliases,
+  selectedAlias,
+  onSelectedAlias,
   onAccount,
   refresh,
   t
 }: {
   account: AccountPayload | null;
+  aliases: AccountAliasesPayload | null;
+  selectedAlias: string;
+  onSelectedAlias: (alias: string) => void;
   onAccount: (account: AccountPayload) => void;
   refresh: () => Promise<void>;
   t: typeof dictionary.en;
 }) {
   const [deposit, setDeposit] = useState("1000");
-  async function refreshAccount() {
-    const response = await fetch("/api/account?refresh=true");
+  const liveAliases = aliases?.aliases ?? [];
+  const activeAlias = selectedAlias || aliases?.default_alias || account?.account_alias || "";
+  async function refreshAccount(alias = activeAlias) {
+    const query = new URLSearchParams({ refresh: "true" });
+    if (alias) query.set("account_alias", alias);
+    const response = await fetch(`/api/account?${query.toString()}`);
     onAccount(await response.json());
+  }
+  async function changeLiveAccount(alias: string) {
+    onSelectedAlias(alias);
+    await refreshAccount(alias);
   }
   async function depositPaper() {
     await fetch("/api/paper-account/deposit", {
@@ -983,11 +1081,24 @@ function Account({
   return (
     <div className="stack">
       <section className="toolbar">
+        <label className="fieldLabel">
+          <span>{t.selectAccount}</span>
+          <select
+            value={activeAlias}
+            onChange={(event) => void changeLiveAccount(event.target.value)}
+          >
+            {!liveAliases.length && <option value="">{t.noRows}</option>}
+            {liveAliases.map((item) => (
+              <option key={item.alias} value={item.alias}>
+                {accountAliasLabel(item)}
+              </option>
+            ))}
+          </select>
+        </label>
         <button className="primaryButton" onClick={() => void refreshAccount()}>
           <RefreshCw size={16} />
           <span>{t.refreshWebull}</span>
         </button>
-        <span className="muted">{account?.message ?? t.liveSafety}</span>
       </section>
       {account?.error && (
         <section className="alert">
@@ -1094,6 +1205,11 @@ function flattenSummaryMessage(summary: FlattenSummary, t: typeof dictionary.en)
     parts.push(`${t.warnings}: ${summary.warnings.join("; ")}`);
   }
   return parts.join(" · ");
+}
+
+function accountAliasLabel(account: AccountAlias): string {
+  const details = account.account_label || account.account_class || account.account_type || account.accountType;
+  return details ? `${account.alias} (${details})` : account.alias;
 }
 
 function renderCell(value: unknown): React.ReactNode {

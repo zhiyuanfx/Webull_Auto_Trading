@@ -49,6 +49,14 @@ def test_settings_resolves_named_webull_account_alias() -> None:
     assert settings.resolve_webull_account_alias("") == "margin-id"
 
 
+def test_settings_loads_dynamic_webull_account_alias_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("WEBULL_ACCOUNT_STOCK_CASH_2_ID", "cash-2-secret")
+    settings = Settings(_env_file=None)
+
+    assert settings.webull_account_aliases()["stock_cash_2"] == "cash-2-secret"
+    assert settings.resolve_webull_account_alias("stock_cash_2") == "cash-2-secret"
+
+
 def test_settings_falls_back_to_legacy_account_id_when_default_alias_missing() -> None:
     settings = Settings(
         webull_account_default_alias="stock_margin",

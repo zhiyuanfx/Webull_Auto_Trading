@@ -33,10 +33,11 @@
 - `frontend/`: local React/Vite operator console.
 
 The runtime uses InsightSentry streaming data plus Python strategy code and Webull Trading
-API reads. Test mode owns paper trading and persistence. Live mode has live execution
-metadata and persisted intent scaffolding, but no strategy/runtime path transmits live
-orders in this phase. The old external-alert bridge has been removed. Do not wire live order
-placement into runtime decisions without an explicit safety plan and user request.
+API reads. Test mode owns paper trading and persistence. Live mode can transmit gated Webull
+market orders from strategy decisions when runtime mode, env master, per-strategy config,
+quote, in-flight, account alias, and reconciliation gates pass. The old external-alert
+bridge has been removed. Do not add new live mutation paths without an explicit safety plan
+and user request.
 
 ## Safety invariants
 
@@ -45,9 +46,9 @@ placement into runtime decisions without an explicit safety plan and user reques
 - SDK token caches under `.runtime/` and local data under `data/` are ignored and must not be
   deleted or migrated without explicit confirmation.
 - The Webull SDK wrapper is live-only. Ordinary tests must use mocks and must not call Webull.
-- Runtime supports global `test` and `live` modes. Live order transmission remains blocked
-  unless a future runtime path passes global mode, master, per-strategy, quote, in-flight,
-  and reconciliation gates.
+- Runtime supports global `test` and `live` modes. Live order transmission is allowed only
+  through the gated market-order path after global mode, master, per-strategy, quote,
+  in-flight, account alias, and reconciliation gates pass.
 - Strategy instances do not expose public per-strategy execution modes.
 - Market quote/series display is process-memory only; do not persist new quote or bar data.
 - There is no external-alert intake, local simulator, alternate trading environment, or live

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import os
+import re
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    _env_file_disabled: bool = PrivateAttr(default=False)
 
     webull_region: str = "us"
     webull_prod_app_key: str = ""
@@ -33,6 +37,11 @@ class Settings(BaseSettings):
     insightsentry_websocket_key: str = ""
     insightsentry_websocket_key_expiration: str = ""
 
+    def __init__(self, **data: Any) -> None:
+        env_file_disabled = data.get("_env_file") is None and "_env_file" in data
+        super().__init__(**data)
+        self._env_file_disabled = env_file_disabled
+
     @property
     def production_configured(self) -> bool:
         return bool(self.webull_prod_app_key and self.webull_prod_app_secret)
@@ -43,6 +52,7 @@ class Settings(BaseSettings):
             "stock_margin": self.webull_account_stock_margin_id,
             "futures": self.webull_account_futures_id,
         }
+        aliases.update(self._dynamic_webull_account_aliases())
         return {alias: account_id for alias, account_id in aliases.items() if account_id}
 
     def resolve_webull_account_alias(self, alias: str) -> str:
@@ -52,6 +62,31 @@ class Settings(BaseSettings):
         if self.webull_account_default_alias:
             return aliases.get(self.webull_account_default_alias, "") or self.webull_account_id
         return self.webull_account_id
+
+    def _dynamic_webull_account_aliases(self) -> dict[str, str]:
+        values: dict[str, str] = {}
+        if not self._env_file_disabled:
+            try:
+                from dotenv import dotenv_values
+            except ImportError:
+                dotenv_values = None
+            if dotenv_values is not None:
+                for key, value in dotenv_values(".env").items():
+                    if value is not None:
+                        values[key] = value
+        values.update(os.environ)
+
+        aliases: dict[str, str] = {}
+        pattern = re.compile(r"^WEBULL_ACCOUNT_(?P<alias>[A-Z0-9_]+)_ID$")
+        for key, value in values.items():
+            if key == "WEBULL_ACCOUNT_ID":
+                continue
+            match = pattern.match(key)
+            if not match or not value:
+                continue
+            alias = match.group("alias").lower()
+            aliases[alias] = str(value)
+        return aliases
 
 
 @lru_cache

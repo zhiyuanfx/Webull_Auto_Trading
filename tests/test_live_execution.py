@@ -42,6 +42,29 @@ def test_build_market_order_request_uses_documented_webull_fields() -> None:
     }
 
 
+def test_build_market_order_request_supports_futures_market_order() -> None:
+    request = build_market_order_request(
+        client_order_id="client-1",
+        webull_symbol="ESZ5",
+        asset_class="futures",
+        side=OrderSide.BUY,
+        quantity=1,
+    )
+
+    assert request == {
+        "client_order_id": "client-1",
+        "combo_type": "NORMAL",
+        "symbol": "ESZ5",
+        "instrument_type": "FUTURES",
+        "market": "US",
+        "order_type": "MARKET",
+        "quantity": "1",
+        "side": "BUY",
+        "time_in_force": "DAY",
+        "entrust_type": "QTY",
+    }
+
+
 def test_stable_client_order_id_is_deterministic_and_short_enough() -> None:
     first = stable_client_order_id(
         strategy_instance_id="st-1",

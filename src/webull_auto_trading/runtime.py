@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 from dataclasses import asdict
 from datetime import datetime
@@ -7,8 +8,22 @@ from typing import Any
 
 from webull_auto_trading.config import Settings
 from webull_auto_trading.config_loader import load_strategy_instances
-from webull_auto_trading.domain import QuoteState, RuntimeMode
-from webull_auto_trading.live_execution import validate_live_strategy_config
+from webull_auto_trading.domain import (
+    LiveIntentAction,
+    LiveIntentStatus,
+    OrderSide,
+    OrderStatus,
+    PaperOrder,
+    QuoteState,
+    RuntimeMode,
+)
+from webull_auto_trading.live_execution import (
+    LiveExecutionBlocked,
+    LiveMarketOrderRequest,
+    LiveOrderClient,
+    WebullLiveExecutionAdapter,
+    validate_live_strategy_config,
+)
 from webull_auto_trading.market_data import (
     MarketStreamBuffer,
     QuoteBook,
@@ -23,12 +38,23 @@ from webull_auto_trading.strategy.recycle_buy import RecycleBuyStrategy
 
 
 class RuntimeService:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        live_order_client: LiveOrderClient | None = None,
+    ) -> None:
         self.settings = settings
         self.repository = RuntimeRepository(settings.runtime_db_path)
         self.quote_book = QuoteBook()
         self.stream_buffer = MarketStreamBuffer(max_messages=20)
         self.order_book = PaperOrderBook()
+        self.live_virtual_book = PaperOrderBook()
+        self.live_execution = WebullLiveExecutionAdapter(
+            settings,
+            self.repository,
+            client=live_order_client,
+        )
         self.risk = RiskController()
         self.strategies: dict[str, Strategy] = {"recycle_buy": RecycleBuyStrategy()}
 
@@ -37,6 +63,7 @@ class RuntimeService:
         self.risk.global_pause = bool(self.repository.get_setting("global_pause", False))
         self.order_book.orders = self.repository.list_paper_orders()
         self.order_book.fills = self.repository.list_paper_fills()
+        self.live_virtual_book.orders = self.repository.list_live_virtual_orders()
         if seed_config:
             self.reload_strategy_config()
 
@@ -81,7 +108,7 @@ class RuntimeService:
 
     def mode_message(self) -> str:
         if self.active_mode() == RuntimeMode.LIVE:
-            return "Live mode: Webull reads enabled, live execution disabled"
+            return ""
         return "Test mode: paper trading with real InsightSentry market data"
 
     def set_global_pause(self, paused: bool) -> dict[str, bool]:
@@ -135,7 +162,7 @@ class RuntimeService:
 
     def flatten_strategy(self, strategy_id: str) -> dict[str, Any]:
         if self.active_mode() == RuntimeMode.LIVE:
-            raise PermissionError("Flatten is paper-only; live execution is disabled")
+            raise PermissionError("Flatten is paper-only; live flatten is not available")
         instance = self.repository.update_strategy_instance(strategy_id, {"enabled": False})
         result = self.order_book.flatten_instance(
             strategy_id,
@@ -166,7 +193,7 @@ class RuntimeService:
 
     def flatten_all_strategies(self) -> dict[str, Any]:
         if self.active_mode() == RuntimeMode.LIVE:
-            raise PermissionError("Flatten is paper-only; live execution is disabled")
+            raise PermissionError("Flatten is paper-only; live flatten is not available")
         self.set_global_pause(True)
         instances = self.repository.list_strategy_instances()
         quotes = self.current_quotes()
@@ -279,7 +306,7 @@ class RuntimeService:
             )
             return [validation.reason]
         if self.active_mode() == RuntimeMode.LIVE:
-            return []
+            return self.evaluate_live_quote(quote)
         messages: list[str] = []
         for instance in self.repository.list_strategy_instances():
             if not instance.enabled or instance.symbol != quote.symbol:
@@ -314,6 +341,153 @@ class RuntimeService:
             market_prices=self.current_market_prices(),
         )
         return messages
+
+    def evaluate_live_quote(self, quote: QuoteState) -> list[str]:
+        messages: list[str] = []
+        for instance in self.repository.list_strategy_instances():
+            if not instance.enabled or instance.symbol != quote.symbol:
+                continue
+            decision = self.risk.allow_instance(instance.id)
+            if not decision.allowed:
+                messages.append(decision.reason)
+                continue
+            if not instance.live_execution_enabled:
+                continue
+            errors = validate_live_strategy_config(instance, self.settings)
+            if errors:
+                message = "; ".join(errors)
+                self.repository.log_activity(
+                    "LiveExecutionBlocked",
+                    message,
+                    level="warning",
+                    strategy_instance_id=instance.id,
+                    symbol=instance.symbol,
+                )
+                messages.append(message)
+                continue
+            strategy = self.resolve_strategy(instance.strategy_name)
+            if strategy is None:
+                message = f"Unknown strategy: {instance.strategy_name}"
+                self.repository.log_activity(
+                    "StrategySkipped",
+                    message,
+                    level="warning",
+                    strategy_instance_id=instance.id,
+                    symbol=instance.symbol,
+                )
+                messages.append(message)
+                continue
+            before = {
+                order.id: (order.status, dict(order.metadata))
+                for order in self.live_virtual_book.orders
+            }
+            for message in strategy.on_quote(instance, quote, self.live_virtual_book):
+                self.repository.log_activity(
+                    message,
+                    message,
+                    strategy_instance_id=instance.id,
+                    symbol=instance.symbol,
+                )
+                messages.append(message)
+            self.repository.sync_live_virtual_state(self.live_virtual_book.orders)
+            for order in self.live_virtual_book.orders:
+                if order.strategy_instance_id != instance.id:
+                    continue
+                previous = before.get(order.id)
+                if previous is None and order.status == OrderStatus.FILLED:
+                    self._submit_live_virtual_order(
+                        instance=instance,
+                        order=order,
+                        action=LiveIntentAction.OPEN_MARKET,
+                        side=order.side,
+                    )
+                elif (
+                    previous is not None
+                    and previous[0] == OrderStatus.FILLED
+                    and order.status == OrderStatus.CLOSED
+                ):
+                    self._submit_live_virtual_order(
+                        instance=instance,
+                        order=order,
+                        action=LiveIntentAction.CLOSE_MARKET,
+                        side=_opposite_side(order.side),
+                    )
+        return messages
+
+    def _submit_live_virtual_order(
+        self,
+        *,
+        instance,
+        order: PaperOrder,
+        action: LiveIntentAction,
+        side: OrderSide,
+    ) -> None:
+        request = LiveMarketOrderRequest(
+            strategy=instance,
+            cycle_id=order.cycle_id,
+            action=action,
+            side=side,
+            quantity=order.quantity,
+        )
+
+        async def submit() -> None:
+            try:
+                intent = await self.live_execution.submit_market_order(
+                    request,
+                    runtime_mode=self.active_mode(),
+                    global_pause=self.risk.global_pause,
+                )
+            except LiveExecutionBlocked as exc:
+                self._handle_live_submission_problem(instance, order, action, str(exc), "BLOCKED")
+                return
+            order.metadata["live_intent_id"] = intent.id
+            order.metadata["client_order_id"] = intent.client_order_id
+            order.metadata["live_status"] = intent.status.value
+            self.repository.sync_live_virtual_state(self.live_virtual_book.orders)
+            if intent.status in {
+                LiveIntentStatus.REJECTED,
+                LiveIntentStatus.UNKNOWN,
+                LiveIntentStatus.DESYNCED,
+            }:
+                self._handle_live_submission_problem(
+                    instance,
+                    order,
+                    action,
+                    intent.error_message or f"live order status {intent.status.value}",
+                    intent.status.value,
+                )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(submit())
+        else:
+            loop.create_task(submit())
+
+    def _handle_live_submission_problem(
+        self,
+        instance,
+        order: PaperOrder,
+        action: LiveIntentAction,
+        message: str,
+        status: str,
+    ) -> None:
+        if action == LiveIntentAction.OPEN_MARKET:
+            order.status = OrderStatus.CANCELLED
+        elif action == LiveIntentAction.CLOSE_MARKET:
+            order.status = OrderStatus.FILLED
+            order.closed_at = None
+        order.metadata["live_status"] = status
+        order.metadata["live_error"] = message
+        self.repository.sync_live_virtual_state(self.live_virtual_book.orders)
+        self.repository.update_strategy_instance(instance.id, {"enabled": False})
+        self.repository.log_activity(
+            "LiveExecutionPaused",
+            f"Strategy paused after live order problem: {message}",
+            level="warning",
+            strategy_instance_id=instance.id,
+            symbol=instance.symbol,
+        )
 
     def resolve_strategy(self, strategy_name: str) -> Strategy | None:
         strategy = self.strategies.get(strategy_name)
@@ -369,6 +543,10 @@ class RuntimeService:
             "orders": [asdict(item) for item in self.order_book.orders],
             "fills": [asdict(item) for item in self.order_book.fills],
         }
+
+
+def _opposite_side(side: OrderSide) -> OrderSide:
+    return OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
 
 
 def _strategy_class_name(strategy_name: str) -> str:

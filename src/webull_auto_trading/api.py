@@ -51,6 +51,9 @@ def get_stream_service() -> InsightSentryQuoteStreamService:
     return InsightSentryQuoteStreamService(get_runtime())
 
 
+LIVE_ACCOUNT_CACHE: dict[str, AccountSnapshot] = {}
+
+
 def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -196,7 +199,7 @@ def create_app() -> FastAPI:
         return get_runtime().repository.list_table("cycles")
 
     @app.get("/api/account")
-    async def account(refresh: bool = False) -> dict[str, Any]:
+    async def account(refresh: bool = False, account_alias: str | None = None) -> dict[str, Any]:
         runtime = get_runtime()
         if runtime.active_mode() == RuntimeMode.TEST:
             paper = runtime.repository.recompute_paper_account(
@@ -210,10 +213,15 @@ def create_app() -> FastAPI:
                 "history": runtime.repository.list_paper_history(limit=20),
             }
         settings = get_settings()
-        account_alias = settings.webull_account_default_alias
-        account_id = settings.resolve_webull_account_alias(account_alias)
+        selected_alias = account_alias or settings.webull_account_default_alias
+        account_id = settings.resolve_webull_account_alias(selected_alias)
+        if selected_alias and not account_id:
+            raise HTTPException(
+                status_code=404,
+                detail=f"account alias is not configured: {selected_alias}",
+            )
         if not refresh:
-            snapshot = AccountSnapshot(
+            snapshot = LIVE_ACCOUNT_CACHE.get(selected_alias) or AccountSnapshot(
                 configured=settings.production_configured,
                 account_id=account_id,
                 error=None if settings.production_configured else "Webull credentials missing",
@@ -221,24 +229,36 @@ def create_app() -> FastAPI:
             return {
                 "mode": RuntimeMode.LIVE.value,
                 "message": runtime.mode_message(),
-                "account_alias": account_alias,
-                **asdict(snapshot),
+                "account_alias": selected_alias,
+                **_safe_account_snapshot(snapshot),
             }
         snapshot = await WebullReadService(settings).snapshot(account_id)
+        if not snapshot.error:
+            LIVE_ACCOUNT_CACHE[selected_alias] = snapshot
         return {
             "mode": RuntimeMode.LIVE.value,
             "message": runtime.mode_message(),
-            "account_alias": account_alias,
-            **asdict(snapshot),
+            "account_alias": selected_alias,
+            **_safe_account_snapshot(snapshot),
         }
 
     @app.get("/api/webull/account-aliases")
-    def webull_account_aliases() -> dict[str, Any]:
+    async def webull_account_aliases(refresh: bool = False) -> dict[str, Any]:
         settings = get_settings()
+        metadata: dict[str, dict[str, Any]] = {}
+        if refresh and settings.production_configured:
+            from webull_auto_trading.cli import fetch_accounts
+            from webull_auto_trading.webull import WebullError
+
+            try:
+                summary = await fetch_accounts(raw=False)
+            except WebullError as exc:
+                raise HTTPException(status_code=502, detail=exc.message) from exc
+            metadata = _safe_alias_metadata(settings.webull_account_aliases(), summary)
         return {
             "default_alias": settings.webull_account_default_alias,
             "aliases": [
-                {"alias": alias, "configured": True}
+                {"alias": alias, "configured": True, **metadata.get(alias, {})}
                 for alias in sorted(settings.webull_account_aliases())
             ],
             "legacy_account_id_configured": bool(settings.webull_account_id),
@@ -250,7 +270,7 @@ def create_app() -> FastAPI:
         from webull_auto_trading.webull import WebullError
 
         try:
-            return await fetch_accounts(raw=raw)
+            return _safe_accounts_summary(await fetch_accounts(raw=raw))
         except WebullError as exc:
             raise HTTPException(status_code=502, detail=exc.message) from exc
 
@@ -295,6 +315,63 @@ def create_app() -> FastAPI:
         return get_runtime().repository.list_table("activity")
 
     return app
+
+
+def _safe_account_snapshot(snapshot: AccountSnapshot) -> dict[str, Any]:
+    return {
+        "configured": snapshot.configured,
+        "account_id_configured": bool(snapshot.account_id),
+        "balance": snapshot.balance,
+        "positions": snapshot.positions,
+        "open_orders": snapshot.open_orders,
+        "error": snapshot.error,
+    }
+
+
+def _safe_alias_metadata(
+    aliases: dict[str, str],
+    account_summary: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    accounts = account_summary.get("accounts") or []
+    by_id = {
+        str(account.get("account_id") or ""): account
+        for account in accounts
+        if isinstance(account, dict)
+    }
+    safe: dict[str, dict[str, Any]] = {}
+    for alias, account_id in aliases.items():
+        account = by_id.get(account_id)
+        if not account:
+            continue
+        safe[alias] = {
+            key: account[key]
+            for key in ("account_type", "accountType", "account_label", "account_class")
+            if key in account
+        }
+    return safe
+
+
+def _safe_accounts_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "account_count": summary.get("account_count", 0),
+        "accounts": [
+            {
+                key: value
+                for key, value in account.items()
+                if key
+                not in {
+                    "account_id",
+                    "accountId",
+                    "account_number",
+                    "accountNumber",
+                    "user_id",
+                    "userId",
+                }
+            }
+            for account in summary.get("accounts", [])
+            if isinstance(account, dict)
+        ],
+    }
 
 
 app = create_app()
