@@ -6,8 +6,15 @@ from fastapi.testclient import TestClient
 
 import webull_auto_trading.api as api
 from webull_auto_trading.config import Settings
-from webull_auto_trading.domain import RuntimeMode
-from webull_auto_trading.execution import AccountSnapshot
+from webull_auto_trading.domain import (
+    LiveIntentAction,
+    LiveOrderIntent,
+    OrderRole,
+    OrderSide,
+    RuntimeMode,
+)
+from webull_auto_trading.execution import AccountSnapshot, LiveOrdersSnapshot
+from webull_auto_trading.order_manager import PaperOrderBook
 from webull_auto_trading.runtime import RuntimeService
 
 
@@ -93,9 +100,110 @@ def test_account_alias_endpoint_does_not_expose_account_ids(tmp_path, monkeypatc
     assert "acct-secret" not in response.text
 
 
+def test_orders_view_returns_test_mode_paper_data(tmp_path, monkeypatch) -> None:
+    settings = Settings(
+        runtime_db_path=tmp_path / "runtime.sqlite3",
+        strategies_test_config_path=tmp_path / "strategies.test.yml",
+        strategies_live_config_path=tmp_path / "strategies.live.yml",
+        _env_file=None,
+    )
+    runtime = RuntimeService(settings)
+    runtime.initialize(seed_config=False)
+    order = PaperOrderBook().place_market_order(
+        strategy_instance_id="st-paper",
+        cycle_id="cyc-paper",
+        symbol="NASDAQ:AAPL",
+        side=OrderSide.BUY,
+        role=OrderRole.MAIN,
+        quantity=1,
+        fill_price=100,
+        stop_loss=95,
+        take_profit=105,
+    )
+    runtime.repository.sync_paper_state([order], [], market_prices={})
+    monkeypatch.setattr(api, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(api, "get_settings", lambda: settings)
+    monkeypatch.setattr(api, "get_stream_service", lambda: FakeStreamService({}))
+
+    with TestClient(api.create_app()) as client:
+        response = client.get("/api/orders-view")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "test"
+    assert [item["id"] for item in payload["paper_orders"]] == [order.id]
+    assert [item["runtime_mode"] for item in payload["paper_cycles"]] == ["test"]
+    assert "live_intents" not in payload
+
+
+def test_orders_view_returns_live_data_without_account_ids(tmp_path, monkeypatch) -> None:
+    settings = Settings(
+        webull_prod_app_key="key",
+        webull_prod_app_secret="secret",
+        webull_account_default_alias="stock_margin",
+        webull_account_stock_margin_id="acct-secret",
+        runtime_db_path=tmp_path / "runtime.sqlite3",
+        strategies_test_config_path=tmp_path / "strategies.test.yml",
+        strategies_live_config_path=tmp_path / "strategies.live.yml",
+        _env_file=None,
+    )
+    runtime = RuntimeService(settings)
+    runtime.initialize(seed_config=False)
+    runtime.repository.set_runtime_mode(RuntimeMode.LIVE)
+    live_order = PaperOrderBook().place_market_order(
+        strategy_instance_id="st-live",
+        cycle_id="cyc-live",
+        symbol="NASDAQ:AAPL",
+        side=OrderSide.BUY,
+        role=OrderRole.MAIN,
+        quantity=1,
+        fill_price=100,
+        stop_loss=95,
+        take_profit=105,
+    )
+    runtime.repository.sync_live_virtual_state([live_order])
+    runtime.repository.upsert_live_order_intent(
+        LiveOrderIntent(
+            id="loi-live",
+            strategy_instance_id="st-live",
+            cycle_id="cyc-live",
+            action=LiveIntentAction.OPEN_MARKET,
+            side=OrderSide.BUY,
+            quantity=1,
+            market_data_symbol="NASDAQ:AAPL",
+            webull_symbol="AAPL",
+            account_alias="stock_margin",
+            account_id="acct-secret",
+            client_order_id="client-live",
+            response={"account_id": "acct-secret", "status": "ok"},
+        )
+    )
+    fake_reader = FakeReadService(settings)
+    api.LIVE_ORDERS_CACHE.clear()
+    monkeypatch.setattr(api, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(api, "get_settings", lambda: settings)
+    monkeypatch.setattr(api, "get_stream_service", lambda: FakeStreamService({}))
+    monkeypatch.setattr(api, "WebullReadService", lambda _settings: fake_reader)
+
+    with TestClient(api.create_app()) as client:
+        response = client.get("/api/orders-view?refresh=true&account_alias=stock_margin")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "live"
+    assert fake_reader.order_calls == ["acct-secret"]
+    assert payload["broker_open_orders"] == [{"client_order_id": "client-live"}]
+    assert payload["broker_order_history"] == [{"client_order_id": "client-old"}]
+    assert payload["live_intents"][0]["client_order_id"] == "client-live"
+    assert [item["runtime_mode"] for item in payload["live_cycles"]] == ["live"]
+    assert "acct-secret" not in response.text
+    assert "paper_orders" not in payload
+
+
 class FakeReadService:
     def __init__(self, _settings: Settings) -> None:
         self.calls: list[str] = []
+        self.order_calls: list[str] = []
 
     async def snapshot(self, account_id: str | None = None) -> AccountSnapshot:
         assert account_id is not None
@@ -106,6 +214,16 @@ class FakeReadService:
             balance={"total_cash_balance": "123.45"},
             positions=[],
             open_orders=[],
+        )
+
+    async def live_orders(self, account_id: str | None = None) -> LiveOrdersSnapshot:
+        assert account_id is not None
+        self.order_calls.append(account_id)
+        return LiveOrdersSnapshot(
+            configured=True,
+            account_id=account_id,
+            open_orders=[{"client_order_id": "client-live", "account_id": account_id}],
+            order_history=[{"client_order_id": "client-old", "account_id": account_id}],
         )
 
 

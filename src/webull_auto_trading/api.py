@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from webull_auto_trading.config import get_settings
 from webull_auto_trading.domain import RuntimeMode
-from webull_auto_trading.execution import AccountSnapshot, WebullReadService
+from webull_auto_trading.execution import AccountSnapshot, LiveOrdersSnapshot, WebullReadService
 from webull_auto_trading.insightsentry_stream import InsightSentryQuoteStreamService
 from webull_auto_trading.runtime import RuntimeService
 
@@ -52,6 +52,7 @@ def get_stream_service() -> InsightSentryQuoteStreamService:
 
 
 LIVE_ACCOUNT_CACHE: dict[str, AccountSnapshot] = {}
+LIVE_ORDERS_CACHE: dict[str, LiveOrdersSnapshot] = {}
 
 
 def create_app() -> FastAPI:
@@ -127,7 +128,56 @@ def create_app() -> FastAPI:
 
     @app.get("/api/live/orders")
     def live_orders() -> list[dict[str, Any]]:
-        return [asdict(item) for item in get_runtime().repository.list_live_order_intents()]
+        return [
+            _safe_live_intent(asdict(item))
+            for item in get_runtime().repository.list_live_order_intents()
+        ]
+
+    @app.get("/api/orders-view")
+    async def orders_view(
+        refresh: bool = False,
+        account_alias: str | None = None,
+    ) -> dict[str, Any]:
+        runtime = get_runtime()
+        if runtime.active_mode() == RuntimeMode.TEST:
+            return {
+                "mode": RuntimeMode.TEST.value,
+                "paper_orders": [asdict(item) for item in runtime.repository.list_paper_orders()],
+                "paper_fills": [asdict(item) for item in runtime.repository.list_paper_fills()],
+                "paper_cycles": runtime.repository.list_cycles(RuntimeMode.TEST),
+            }
+
+        settings = get_settings()
+        selected_alias = account_alias or settings.webull_account_default_alias or ""
+        account_id = settings.resolve_webull_account_alias(selected_alias)
+        if selected_alias and not account_id:
+            raise HTTPException(
+                status_code=404,
+                detail=f"account alias is not configured: {selected_alias}",
+            )
+        snapshot = LIVE_ORDERS_CACHE.get(selected_alias)
+        if refresh or snapshot is None:
+            snapshot = await WebullReadService(settings).live_orders(account_id)
+            if not snapshot.error or snapshot.open_orders or snapshot.order_history:
+                LIVE_ORDERS_CACHE[selected_alias] = snapshot
+        secret_values = {account_id} if account_id else set()
+        return {
+            "mode": RuntimeMode.LIVE.value,
+            "account_alias": selected_alias,
+            **_safe_live_orders_snapshot(snapshot, secret_values),
+            "live_intents": [
+                _safe_live_intent(asdict(item), secret_values)
+                for item in runtime.repository.list_live_order_intents()
+            ],
+            "live_virtual_orders": [
+                asdict(item) for item in runtime.repository.list_live_virtual_orders()
+            ],
+            "live_cycles": runtime.repository.list_cycles(RuntimeMode.LIVE),
+            "reconciliation_events": [
+                _redact_sensitive_values(row, secret_values)
+                for row in runtime.repository.list_table("live_reconciliation_events")
+            ],
+        }
 
     @app.post("/api/live/strategies/{strategy_id}/flatten")
     def live_flatten(strategy_id: str) -> dict[str, Any]:
@@ -196,7 +246,8 @@ def create_app() -> FastAPI:
 
     @app.get("/api/cycles")
     def list_cycles() -> list[dict[str, Any]]:
-        return get_runtime().repository.list_table("cycles")
+        runtime = get_runtime()
+        return runtime.repository.list_cycles(runtime.active_mode())
 
     @app.get("/api/account")
     async def account(refresh: bool = False, account_alias: str | None = None) -> dict[str, Any]:
@@ -326,6 +377,49 @@ def _safe_account_snapshot(snapshot: AccountSnapshot) -> dict[str, Any]:
         "open_orders": snapshot.open_orders,
         "error": snapshot.error,
     }
+
+
+def _safe_live_orders_snapshot(
+    snapshot: LiveOrdersSnapshot,
+    secret_values: set[str],
+) -> dict[str, Any]:
+    return {
+        "configured": snapshot.configured,
+        "account_id_configured": bool(snapshot.account_id),
+        "broker_open_orders": _redact_sensitive_values(snapshot.open_orders, secret_values),
+        "broker_order_history": _redact_sensitive_values(snapshot.order_history, secret_values),
+        "error": _redact_sensitive_values(snapshot.error, secret_values),
+    }
+
+
+def _safe_live_intent(
+    row: dict[str, Any],
+    secret_values: set[str] | None = None,
+) -> dict[str, Any]:
+    safe = dict(row)
+    account_id = safe.pop("account_id", "")
+    values = set(secret_values or set())
+    if account_id:
+        values.add(str(account_id))
+    return _redact_sensitive_values(safe, values)
+
+
+def _redact_sensitive_values(value: Any, secret_values: set[str]) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _redact_sensitive_values(item, secret_values)
+            for key, item in value.items()
+            if key not in {"account_id", "accountId", "accountID"}
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive_values(item, secret_values) for item in value]
+    if isinstance(value, str):
+        redacted = value
+        for secret in secret_values:
+            if secret:
+                redacted = redacted.replace(secret, "<redacted>")
+        return redacted
+    return value
 
 
 def _safe_alias_metadata(

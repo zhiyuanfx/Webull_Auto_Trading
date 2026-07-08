@@ -76,6 +76,27 @@ type AccountAliasesPayload = {
   legacy_account_id_configured: boolean;
 };
 
+type OrdersViewPayload =
+  | {
+      mode: "test";
+      paper_orders: Record<string, unknown>[];
+      paper_fills: Record<string, unknown>[];
+      paper_cycles: Record<string, unknown>[];
+    }
+  | {
+      mode: "live";
+      account_alias: string;
+      configured?: boolean;
+      account_id_configured?: boolean;
+      broker_open_orders: Record<string, unknown>[];
+      broker_order_history: Record<string, unknown>[];
+      live_intents: Record<string, unknown>[];
+      live_virtual_orders: Record<string, unknown>[];
+      live_cycles: Record<string, unknown>[];
+      reconciliation_events: Record<string, unknown>[];
+      error?: string | null;
+    };
+
 type ActivityRow = {
   id: number;
   ts: string;
@@ -142,6 +163,7 @@ const dictionary = {
       current_equity: "Current equity",
       cycles: "Cycles",
       event_type: "Event type",
+      error_message: "Error",
       fill_price: "Fill price",
       fills: "Fills",
       last_price: "Last price",
@@ -177,6 +199,8 @@ const dictionary = {
       unrealized_pnl: "Unrealized P&L",
       unrealized_profit_loss: "Unrealized P&L"
     },
+    brokerOrderHistory: "Broker order history",
+    brokerOpenOrders: "Broker open orders",
     clear: "Clear",
     configured: "Configured",
     controls: "Controls",
@@ -196,11 +220,15 @@ const dictionary = {
     globalResume: "Global Resume",
     warnings: "Warnings",
     live: "Live",
+    liveCycles: "Live cycles",
     liveFlattenDisabled: "Live flatten is not available",
+    liveIntents: "Live intents",
+    liveVirtualOrders: "Live virtual orders",
     market: "Market Data",
     lastUpdated: "Last updated",
     noActivity: "No activity",
     noMessages: "No stream messages",
+    noLiveOrders: "No live orders",
     noOrders: "No paper orders",
     noRows: "No rows",
     off: "Off",
@@ -268,6 +296,7 @@ const dictionary = {
       current_equity: "当前权益",
       cycles: "周期",
       event_type: "事件类型",
+      error_message: "错误",
       fill_price: "成交价",
       fills: "成交",
       last_price: "最新价",
@@ -303,6 +332,8 @@ const dictionary = {
       unrealized_pnl: "未实现盈亏",
       unrealized_profit_loss: "未实现盈亏"
     },
+    brokerOrderHistory: "券商历史订单",
+    brokerOpenOrders: "券商未结订单",
     clear: "清除",
     configured: "已配置",
     controls: "控制",
@@ -322,11 +353,15 @@ const dictionary = {
     globalResume: "全局恢复",
     warnings: "警告",
     live: "实盘",
+    liveCycles: "实盘周期",
     liveFlattenDisabled: "实盘平仓暂不可用",
+    liveIntents: "实盘意图",
+    liveVirtualOrders: "实盘虚拟订单",
     market: "市场数据",
     lastUpdated: "上次刷新",
     noActivity: "暂无活动",
     noMessages: "暂无流消息",
+    noLiveOrders: "暂无实盘订单",
     noOrders: "暂无纸面订单",
     noRows: "暂无数据",
     off: "关闭",
@@ -383,8 +418,7 @@ function App() {
   const [lang, setLang] = useState<Lang>(() => (localStorage.getItem("lang") as Lang) || "en");
   const [health, setHealth] = useState<Health | null>(null);
   const [strategies, setStrategies] = useState<StrategyInstance[]>([]);
-  const [orders, setOrders] = useState<Record<string, unknown>[]>([]);
-  const [cycles, setCycles] = useState<Record<string, unknown>[]>([]);
+  const [ordersView, setOrdersView] = useState<OrdersViewPayload | null>(null);
   const [account, setAccount] = useState<AccountPayload | null>(null);
   const [accountAliases, setAccountAliases] = useState<AccountAliasesPayload | null>(null);
   const [selectedAccountAlias, setSelectedAccountAlias] = useState(
@@ -418,8 +452,7 @@ function App() {
       const [
         healthRes,
         strategiesRes,
-        ordersRes,
-        cyclesRes,
+        ordersViewRes,
         accountRes,
         aliasesRes,
         activityRes,
@@ -428,17 +461,15 @@ function App() {
         await Promise.all([
           fetch("/api/health"),
           fetch("/api/strategies"),
-          fetch("/api/orders"),
-          fetch("/api/cycles"),
+          fetch(`/api/orders-view${accountQuery}`),
           fetch(`/api/account${accountQuery}`),
           fetch("/api/webull/account-aliases"),
           fetch("/api/activity"),
           fetch("/api/storage/stats")
-        ]);
+      ]);
       setHealth(await healthRes.json());
       setStrategies(await strategiesRes.json());
-      setOrders(await ordersRes.json());
-      setCycles(await cyclesRes.json());
+      setOrdersView(await ordersViewRes.json());
       setAccount(await accountRes.json());
       const aliasesPayload = (await aliasesRes.json()) as AccountAliasesPayload;
       setAccountAliases(aliasesPayload);
@@ -455,6 +486,7 @@ function App() {
   }
 
   async function switchMode(mode: RuntimeMode) {
+    setOrdersView(null);
     await fetch("/api/settings/runtime-mode", {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -478,6 +510,7 @@ function App() {
   }, [selectedAccountAlias]);
 
   useEffect(() => {
+    setOrdersView(null);
     void refresh();
     const handle = window.setInterval(() => void refresh(), 5000);
     return () => window.clearInterval(handle);
@@ -490,7 +523,16 @@ function App() {
       case "market":
         return <Market strategies={strategies} t={t} />;
       case "orders":
-        return <Orders orders={orders} cycles={cycles} t={t} />;
+        return (
+          <Orders
+            ordersView={ordersView}
+            mode={health?.mode ?? "test"}
+            aliases={accountAliases}
+            selectedAlias={selectedAccountAlias}
+            onSelectedAlias={setSelectedAccountAlias}
+            t={t}
+          />
+        );
       case "account":
         return (
           <Account
@@ -516,7 +558,7 @@ function App() {
           />
         );
     }
-  }, [tab, health, strategies, orders, cycles, account, accountAliases, selectedAccountAlias, activity, storage, t]);
+  }, [tab, health, strategies, ordersView, account, accountAliases, selectedAccountAlias, activity, storage, t]);
 
   const refreshTitle = lastUpdatedAt
     ? `${t.lastUpdated} ${lastUpdatedAt.toLocaleTimeString()}`
@@ -995,24 +1037,118 @@ function Market({ strategies, t }: { strategies: StrategyInstance[]; t: typeof d
 }
 
 function Orders({
-  orders,
-  cycles,
+  ordersView,
+  mode,
+  aliases,
+  selectedAlias,
+  onSelectedAlias,
   t
 }: {
-  orders: Record<string, unknown>[];
-  cycles: Record<string, unknown>[];
+  ordersView: OrdersViewPayload | null;
+  mode: RuntimeMode;
+  aliases: AccountAliasesPayload | null;
+  selectedAlias: string;
+  onSelectedAlias: (alias: string) => void;
   t: typeof dictionary.en;
 }) {
+  if (!ordersView || ordersView.mode !== mode) {
+    return (
+      <div className="stack">
+        <Table rows={[]} columns={["symbol", "side", "status"]} empty={t.noRows} t={t} />
+      </div>
+    );
+  }
+  if (ordersView.mode === "live") {
+    const liveAliases = aliases?.aliases ?? [];
+    const activeAlias = selectedAlias || aliases?.default_alias || ordersView.account_alias || "";
+    return (
+      <div className="stack">
+        <section className="toolbar">
+          <label className="fieldLabel">
+            <span>{t.selectAccount}</span>
+            <select value={activeAlias} onChange={(event) => onSelectedAlias(event.target.value)}>
+              {!liveAliases.length && <option value="">{t.noRows}</option>}
+              {liveAliases.map((alias) => (
+                <option key={alias.alias} value={alias.alias}>
+                  {accountAliasLabel(alias)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </section>
+        {ordersView.error ? (
+          <section className="alert">
+            <ShieldAlert size={18} />
+            <span>{ordersView.error}</span>
+          </section>
+        ) : null}
+        <section className="panel tablePanel">
+          <h2>{t.brokerOpenOrders}</h2>
+          <InnerTable
+            rows={ordersView.broker_open_orders}
+            columns={["client_order_id", "combo_type", "orders"]}
+            empty={t.noLiveOrders}
+            t={t}
+          />
+        </section>
+        <section className="panel tablePanel">
+          <h2>{t.brokerOrderHistory}</h2>
+          <InnerTable
+            rows={ordersView.broker_order_history}
+            columns={["client_order_id", "combo_type", "orders"]}
+            empty={t.noLiveOrders}
+            t={t}
+          />
+        </section>
+        <section className="panel tablePanel">
+          <h2>{t.liveIntents}</h2>
+          <InnerTable
+            rows={ordersView.live_intents}
+            columns={[
+              "client_order_id",
+              "action",
+              "side",
+              "quantity",
+              "webull_symbol",
+              "status",
+              "created_at",
+              "error_message"
+            ]}
+            empty={t.noLiveOrders}
+            t={t}
+          />
+        </section>
+        <section className="panel tablePanel">
+          <h2>{t.liveVirtualOrders}</h2>
+          <InnerTable
+            rows={ordersView.live_virtual_orders}
+            columns={["symbol", "side", "role", "status", "quantity", "fill_price", "stop_loss"]}
+            empty={t.noLiveOrders}
+            t={t}
+          />
+        </section>
+        <section className="panel tablePanel">
+          <h2>{t.liveCycles}</h2>
+          <InnerTable
+            rows={ordersView.live_cycles}
+            columns={["symbol", "status", "opened_at", "closed_at", "realized_pnl"]}
+            empty={t.noRows}
+            t={t}
+          />
+        </section>
+      </div>
+    );
+  }
   return (
     <div className="stack">
       <Table
-        rows={orders}
+        rows={ordersView.paper_orders}
         columns={["symbol", "side", "role", "status", "stop_price", "fill_price", "stop_loss"]}
         empty={t.noOrders}
         t={t}
       />
       <Table
-        rows={cycles}
+        rows={ordersView.paper_cycles}
         columns={["symbol", "status", "opened_at", "closed_at", "realized_pnl"]}
         empty={t.noRows}
         t={t}
@@ -1160,29 +1296,43 @@ function Table({
 }) {
   return (
     <section className="panel tablePanel">
-      {rows.length === 0 ? (
-        <div className="empty">{empty}</div>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              {columns.map((column) => (
-                <th key={column}>{columnHeader(column, t)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, index) => (
-              <tr key={index}>
-                {columns.map((column) => (
-                  <td key={column}>{renderCell(row[column])}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <InnerTable rows={rows} columns={columns} empty={empty} t={t} />
     </section>
+  );
+}
+
+function InnerTable({
+  rows,
+  columns,
+  empty,
+  t
+}: {
+  rows: Record<string, unknown>[];
+  columns: string[];
+  empty: string;
+  t: typeof dictionary.en;
+}) {
+  return rows.length === 0 ? (
+    <div className="empty">{empty}</div>
+  ) : (
+    <table>
+      <thead>
+        <tr>
+          {columns.map((column) => (
+            <th key={column}>{columnHeader(column, t)}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, index) => (
+          <tr key={index}>
+            {columns.map((column) => (
+              <td key={column}>{renderCell(row[column])}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

@@ -233,6 +233,7 @@ def test_live_quote_submits_open_and_virtual_close_market_orders(tmp_path) -> No
         "OPEN_MARKET",
     ]
     assert runtime.repository.list_live_virtual_orders()[0].status == OrderStatus.CLOSED
+    assert runtime.repository.list_cycles(RuntimeMode.LIVE)[0]["runtime_mode"] == "live"
 
 
 def test_live_order_rejection_pauses_strategy(tmp_path) -> None:

@@ -81,6 +81,12 @@ class WebullTradingClient:
         )
         return self._require_success(response)
 
+    async def order_history(self, account_id: str) -> list[dict[str, Any]]:
+        response = await self._sdk_response(
+            self._trade_client().order_v3.get_order_history, account_id, 100
+        )
+        return self._require_success(response)
+
     async def place_order(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:
         response = await self._sdk_response(
             self._trade_client().order_v3.place_order, account_id, [order]

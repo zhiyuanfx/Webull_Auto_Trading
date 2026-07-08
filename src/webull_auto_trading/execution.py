@@ -17,6 +17,15 @@ class AccountSnapshot:
     error: str | None = None
 
 
+@dataclass(slots=True)
+class LiveOrdersSnapshot:
+    configured: bool
+    account_id: str
+    open_orders: list[dict[str, Any]]
+    order_history: list[dict[str, Any]]
+    error: str | None = None
+
+
 class WebullReadService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -40,4 +49,41 @@ class WebullReadService:
             balance=balance,
             positions=positions,
             open_orders=open_orders,
+        )
+
+    async def live_orders(self, account_id: str | None = None) -> LiveOrdersSnapshot:
+        resolved_account_id = account_id or self.settings.webull_account_id
+        if not self.client.configured:
+            return LiveOrdersSnapshot(
+                configured=False,
+                account_id=resolved_account_id,
+                open_orders=[],
+                order_history=[],
+                error="Webull credentials missing",
+            )
+        if not resolved_account_id:
+            return LiveOrdersSnapshot(
+                configured=True,
+                account_id="",
+                open_orders=[],
+                order_history=[],
+                error="WEBULL_ACCOUNT_ID is not configured",
+            )
+        errors: list[str] = []
+        try:
+            open_orders = await self.client.open_orders(resolved_account_id)
+        except WebullError as exc:
+            open_orders = []
+            errors.append(exc.message)
+        try:
+            order_history = await self.client.order_history(resolved_account_id)
+        except WebullError as exc:
+            order_history = []
+            errors.append(exc.message)
+        return LiveOrdersSnapshot(
+            configured=True,
+            account_id=resolved_account_id,
+            open_orders=open_orders,
+            order_history=order_history,
+            error="; ".join(errors) or None,
         )

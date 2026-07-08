@@ -1,3 +1,5 @@
+import sqlite3
+
 from webull_auto_trading.domain import (
     ExecutionMode,
     LiveIntentAction,
@@ -123,6 +125,108 @@ def test_paper_orders_fills_and_positions_restore(tmp_path) -> None:
     assert orders[0].id == order.id
     assert positions[0].quantity == 2
     assert account.unrealized_pnl == 10
+
+
+def test_existing_cycles_migrate_to_test_runtime_mode(tmp_path) -> None:
+    db_path = tmp_path / "runtime.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE cycles (
+                id TEXT PRIMARY KEY,
+                strategy_instance_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                status TEXT NOT NULL,
+                opened_at TEXT NOT NULL,
+                closed_at TEXT,
+                realized_pnl REAL NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO cycles(
+                id, strategy_instance_id, symbol, status, opened_at, metadata_json
+            )
+            VALUES ('cyc-legacy', 'st-1', 'NASDAQ:AAPL', 'OPEN', '2026-01-01T00:00:00+00:00', '{}')
+            """
+        )
+
+    repo = RuntimeRepository(db_path)
+    repo.init_db()
+
+    assert repo.list_cycles(RuntimeMode.TEST)[0]["id"] == "cyc-legacy"
+    assert repo.list_cycles(RuntimeMode.LIVE) == []
+
+
+def test_paper_reset_and_cleanup_preserve_live_order_storage(tmp_path) -> None:
+    db_path = tmp_path / "runtime.sqlite3"
+    repo = RuntimeRepository(db_path)
+    repo.init_db()
+    paper_order = PaperOrderBook().place_market_order(
+        strategy_instance_id="st-paper",
+        cycle_id="cyc-paper",
+        symbol="NASDAQ:AAPL",
+        side=OrderSide.BUY,
+        role=OrderRole.MAIN,
+        quantity=1,
+        fill_price=100,
+        stop_loss=95,
+        take_profit=105,
+    )
+    paper_order.status = OrderStatus.CLOSED
+    paper_order.metadata["close_price"] = 101
+    paper_order.closed_at = paper_order.opened_at
+    repo.sync_paper_state([paper_order], [], market_prices={})
+    live_order = PaperOrderBook().place_market_order(
+        strategy_instance_id="st-live",
+        cycle_id="cyc-live",
+        symbol="NASDAQ:AAPL",
+        side=OrderSide.BUY,
+        role=OrderRole.MAIN,
+        quantity=1,
+        fill_price=100,
+        stop_loss=95,
+        take_profit=105,
+    )
+    live_order.status = OrderStatus.CLOSED
+    live_order.metadata["close_price"] = 102
+    live_order.closed_at = live_order.opened_at
+    repo.sync_live_virtual_state([live_order])
+    intent = LiveOrderIntent(
+        id="loi-live",
+        strategy_instance_id="st-live",
+        cycle_id="cyc-live",
+        action=LiveIntentAction.OPEN_MARKET,
+        side=OrderSide.BUY,
+        quantity=1,
+        market_data_symbol="NASDAQ:AAPL",
+        webull_symbol="AAPL",
+        account_alias="stock_margin",
+        account_id="acct-secret",
+        client_order_id="client-live",
+    )
+    repo.upsert_live_order_intent(intent)
+
+    repo.reset_paper_account()
+
+    assert repo.list_paper_orders() == []
+    assert repo.list_cycles(RuntimeMode.TEST) == []
+    assert repo.list_live_virtual_orders()[0].id == live_order.id
+    assert repo.list_live_order_intents()[0].id == "loi-live"
+    assert repo.list_cycles(RuntimeMode.LIVE)[0]["id"] == "cyc-live"
+
+    with repo.connect() as conn:
+        conn.execute(
+            """
+            UPDATE cycles
+            SET status = 'COMPLETED', closed_at = '2000-01-01T00:00:00+00:00'
+            """
+        )
+    repo.cleanup(dry_run=False, closed_cycle_days=1)
+
+    assert repo.list_cycles(RuntimeMode.LIVE)[0]["id"] == "cyc-live"
 
 
 def test_live_order_intents_persist_and_block_unresolved(tmp_path) -> None:

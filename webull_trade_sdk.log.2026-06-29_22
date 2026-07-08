@@ -1,0 +1,30 @@
+8603460160 2026-06-29 22:50:24,454 webull.core.client ERROR HttpError occurred. Host:api.webull.com SDK-Version:2.0.12 Request:{
+  "_version": "v2",
+  "_action_name": "/openapi/config",
+  "_protocol_type": "https",
+  "_accept_format": "JSON",
+  "_params": {},
+  "_method": "GET",
+  "_header": {
+    "x-version": "v2",
+    "Accept-Encoding": "gzip",
+    "x-app-key": "k",
+    "x-timestamp": "2026-06-30T05:50:24Z",
+    "x-signature-version": "1.0",
+    "x-signature-algorithm": "HMAC-SHA1",
+    "x-signature-nonce": "d5c35e02-12bc-56d4-b50b-069fe07eb566",
+    "x-signature": "61z0+kCjTb2lEaRZvWOP3IC5Tvc=",
+    "User-Agent": "WebullApiSDK (Darwin 24.6.0;arm64) Python/3.12.13 Core/2.0.12 python-requests/2.34.2",
+    "x-webull-client-source": "sdk"
+  },
+  "_body_params": null,
+  "_uri_pattern": null,
+  "_uri_params": null,
+  "_content": null,
+  "_extra_user_agent": {},
+  "string_to_sign": "",
+  "_request_connect_timeout": null,
+  "_request_read_timeout": null,
+  "endpoint": "api.webull.com",
+  "_signer_spec": "<module 'webull.core.auth.algorithm.sha_hmac1' from '/opt/miniconda3/envs/webull-strategy-desk/lib/python3.12/site-packages/webull/core/auth/algorithm/sha_hmac1.py'>"
+} ClientException:SDK.HttpError HTTPSConnectionPool(host='api.webull.com', port=443): Max retries exceeded with url: /openapi/config (Caused by NameResolutionError("HTTPSConnection(host='api.webull.com', port=443): Failed to resolve 'api.webull.com' ([Errno 8] nodename nor servname provided, or not known)"))

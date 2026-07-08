@@ -25,7 +25,7 @@ from webull_auto_trading.domain import (
     utc_now,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def encode_json(value: Any) -> str:
@@ -105,6 +105,7 @@ class RuntimeRepository:
                 );
                 CREATE TABLE IF NOT EXISTS cycles (
                     id TEXT PRIMARY KEY,
+                    runtime_mode TEXT NOT NULL DEFAULT 'test',
                     strategy_instance_id TEXT NOT NULL,
                     symbol TEXT NOT NULL,
                     status TEXT NOT NULL,
@@ -247,6 +248,7 @@ class RuntimeRepository:
                 """
             )
             self._ensure_strategy_live_columns(conn)
+            self._ensure_cycle_mode_column(conn)
             conn.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -275,6 +277,19 @@ class RuntimeRepository:
             UPDATE strategy_instances
             SET market_data_symbol = symbol
             WHERE market_data_symbol = ''
+            """
+        )
+
+    def _ensure_cycle_mode_column(self, conn: sqlite3.Connection) -> None:
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(cycles)").fetchall()}
+        if "runtime_mode" not in existing:
+            conn.execute(
+                "ALTER TABLE cycles ADD COLUMN runtime_mode TEXT NOT NULL DEFAULT 'test'"
+            )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_cycles_runtime_mode_opened_at
+                ON cycles(runtime_mode, opened_at)
             """
         )
 
@@ -408,6 +423,32 @@ class RuntimeRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_cycles(
+        self,
+        mode: RuntimeMode | str | None = None,
+        *,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        runtime_mode = RuntimeMode(mode) if mode is not None else None
+        params: tuple[Any, ...]
+        if runtime_mode is None:
+            where = ""
+            params = (limit,)
+        else:
+            where = "WHERE runtime_mode = ?"
+            params = (runtime_mode.value, limit)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM cycles
+                {where}
+                ORDER BY opened_at DESC, id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def ensure_paper_account(self, starting_balance: float = 10_000.0) -> PaperAccount:
         account = self.get_active_paper_account()
         if account is not None:
@@ -491,7 +532,7 @@ class RuntimeRepository:
         with self.connect() as conn:
             conn.execute("DELETE FROM fills")
             conn.execute("DELETE FROM orders")
-            conn.execute("DELETE FROM cycles")
+            conn.execute("DELETE FROM cycles WHERE runtime_mode = 'test'")
             conn.execute("DELETE FROM paper_positions")
             conn.execute("DELETE FROM paper_account_events")
             conn.execute("DELETE FROM paper_accounts")
@@ -562,9 +603,10 @@ class RuntimeRepository:
         return [self._paper_order_from_row(row) for row in rows]
 
     def sync_live_virtual_state(self, orders: Iterable[PaperOrder]) -> None:
+        order_list = list(orders)
         with self.connect() as conn:
             conn.execute("DELETE FROM live_virtual_orders")
-            for order in orders:
+            for order in order_list:
                 conn.execute(
                     """
                     INSERT INTO live_virtual_orders(
@@ -594,6 +636,7 @@ class RuntimeRepository:
                         iso(),
                     ),
                 )
+            self._sync_cycles(conn, order_list, RuntimeMode.LIVE)
 
     def upsert_live_order_intent(self, intent: LiveOrderIntent) -> LiveOrderIntent:
         intent.updated_at = utc_now()
@@ -781,7 +824,7 @@ class RuntimeRepository:
                         iso(fill.filled_at),
                     ),
                 )
-            self._sync_cycles(conn, order_list)
+            self._sync_cycles(conn, order_list, RuntimeMode.TEST)
         self.recompute_paper_account(market_prices=market_prices)
 
     def recompute_paper_account(
@@ -966,7 +1009,10 @@ class RuntimeRepository:
                 (paper_cutoff,),
             ),
             "closed_cycles_old": (
-                "DELETE FROM cycles WHERE status != 'OPEN' AND closed_at < ?",
+                """
+                DELETE FROM cycles
+                WHERE runtime_mode = 'test' AND status != 'OPEN' AND closed_at < ?
+                """,
                 (cycle_cutoff,),
             ),
         }
@@ -1044,7 +1090,12 @@ class RuntimeRepository:
             conn.execute("DELETE FROM strategy_instances")
         self.seed_strategy_instances(prepared)
 
-    def _sync_cycles(self, conn: sqlite3.Connection, orders: list[PaperOrder]) -> None:
+    def _sync_cycles(
+        self,
+        conn: sqlite3.Connection,
+        orders: list[PaperOrder],
+        runtime_mode: RuntimeMode,
+    ) -> None:
         by_cycle: dict[str, list[PaperOrder]] = {}
         for order in orders:
             by_cycle.setdefault(order.cycle_id, []).append(order)
@@ -1081,11 +1132,12 @@ class RuntimeRepository:
             conn.execute(
                 """
                 INSERT INTO cycles(
-                    id, strategy_instance_id, symbol, status, opened_at, closed_at,
+                    id, runtime_mode, strategy_instance_id, symbol, status, opened_at, closed_at,
                     realized_pnl, metadata_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
+                    runtime_mode=excluded.runtime_mode,
                     status=excluded.status,
                     closed_at=excluded.closed_at,
                     realized_pnl=excluded.realized_pnl,
@@ -1093,6 +1145,7 @@ class RuntimeRepository:
                 """,
                 (
                     cycle_id,
+                    runtime_mode.value,
                     sample.strategy_instance_id,
                     sample.symbol,
                     status,

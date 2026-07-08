@@ -53,3 +53,25 @@ def test_account_balance_uses_official_sdk_account_method() -> None:
     result = asyncio.run(client.account_balance("acct-1"))
 
     assert result == {"total_net_liquidation_value": "100.00"}
+
+
+def test_order_history_uses_official_sdk_order_method() -> None:
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> list[dict[str, str]]:
+            return [{"client_order_id": "client-1"}]
+
+    class OrderV3:
+        def get_order_history(self, account_id: str, page_size: int) -> Response:
+            assert account_id == "acct-1"
+            assert page_size == 100
+            return Response()
+
+    client = WebullTradingClient(Settings(_env_file=None))
+    client._client = type("TradeClient", (), {"order_v3": OrderV3()})()
+
+    result = asyncio.run(client.order_history("acct-1"))
+
+    assert result == [{"client_order_id": "client-1"}]
