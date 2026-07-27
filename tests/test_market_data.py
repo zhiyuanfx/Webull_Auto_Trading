@@ -8,8 +8,33 @@ from webull_auto_trading.market_data import (
     build_subscription_payload,
     merge_quote_fields,
     parse_market_message,
+    parse_series_bars,
     validate_quote,
 )
+
+
+def test_parse_hour_series_into_in_memory_bars() -> None:
+    bars = parse_series_bars(
+        {
+            "code": "COMEX_MINI:MGCQ2026",
+            "bar_type": "1h",
+            "series": [
+                {
+                    "time": 1_784_000_000,
+                    "open": 2400,
+                    "high": 2410,
+                    "low": 2390,
+                    "close": 2405,
+                    "volume": 12,
+                }
+            ],
+        }
+    )
+
+    assert len(bars) == 1
+    assert bars[0].bar_type == "hour"
+    assert bars[0].bar_interval == 1
+    assert bars[0].symbol == "COMEX_MINI:MGCQ2026"
 
 
 def test_quote_partial_updates_merge_without_dropping_existing_fields() -> None:

@@ -30,10 +30,10 @@ local source/config, not through the UI. The local API supports runtime pause/re
 for configured instances.
 
 `webull-auto-trading serve` owns one background InsightSentry quote WebSocket consumer. It
-subscribes only to deduplicated enabled strategy symbols, keeps quote and raw stream display
-state in process memory, and surfaces missing credentials, idle symbols, reconnecting, and
-stream errors through a safe local status endpoint. Global pause does not stop market data
-visibility.
+builds one complete replacement subscription set from every enabled strategy's requirements,
+keeps quote, series, and raw stream display state in process memory, and surfaces missing
+credentials, idle symbols, reconnecting, and stream errors through a safe local status
+endpoint. Global pause does not stop market data visibility.
 
 Operator pause state is persistent. Config `enabled` seeds a new strategy ID, while the
 SQLite strategy setting remains authoritative for an existing ID. Global and per-strategy
@@ -78,11 +78,38 @@ Webull account aliases from `.env`, persists live order intents plus reconciliat
 and uses InsightSentry quote-driven strategy decisions to submit Webull market orders only
 after all gates pass.
 
-The runtime keeps Webull as account and order truth, uses deterministic client order IDs,
-blocks duplicate in-flight actions, and requires runtime mode, master switch, per-strategy
-live execution, quote freshness, account alias, symbol, and reconciliation gates before
-submitting. Live SL/TP/trailing state is virtual in the backend; opens and closes transmit
-as market orders only.
+The runtime keeps Webull as account and order truth, uses deterministic client order IDs
+that include a unique virtual execution leg, blocks duplicate in-flight actions, and
+requires runtime mode, master switch, per-strategy live execution, quote freshness, account
+alias, successful BUY/SELL previews, current account state, and reconciliation gates before
+submitting. Futures OCO/OTOCO entry brackets and SL/TP/trailing state are virtual in the
+backend; opens and closes transmit as market orders only.
+
+Order Detail is polled within its documented limit because Open Orders and Order History can
+lag. Allocations transition through `OPENING`, `OPEN`, `CLOSING`, `CLOSED`, or an explicit
+error state. Partial fills remain in-flight. Initial stops, final targets, and trailing
+calculations use the actual confirmed Webull fill price. A rejected, cancelled, or unknown
+mutation pauses the strategy instead of retrying.
+
+Balance and position snapshots refresh every five seconds. `total_net_liquidation_value`
+feeds account-wide daily loss controls, while snapshots older than 15 seconds block entries.
+The Webull aggregate position for an account alias and symbol must equal the signed sum of
+all tagged strategy allocations plus the captured external baseline. Same-symbol strategies
+remain independently attributed even when their positions net at Webull. An unexplained
+mismatch pauses all matching strategies and is never auto-adopted or auto-flattened.
+
+## Session-relative strategy safety
+
+Strategies can request series history, consume account snapshots, export/import durable
+control state, and receive periodic timer callbacks without breaking existing quote-only
+strategies. Market bars remain volatile. Durable state is limited to session identity,
+cycle/cooldown data, equity baseline, active cycle identity, and add-on counters.
+
+CME-relative futures strategies define the session in `America/Chicago`, derive yesterday's
+range from the last completed exchange session, delay entry relative to the daily candle
+open, and use timer callbacks for the pre-maintenance flatten. Contract-specific last-entry
+and force-exit timestamps replace reusable EA license expiration dates. Strategy-only
+grouped exits never close allocations owned by another strategy.
 
 ## Volatile market display
 

@@ -33,6 +33,22 @@ class LiveOrderClient(Protocol):
     async def place_order(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:
         ...
 
+    async def preview_order(self, account_id: str, order: dict[str, Any]) -> dict[str, Any]:
+        ...
+
+    async def order_detail(
+        self,
+        account_id: str,
+        client_order_id: str,
+    ) -> dict[str, Any]:
+        ...
+
+    async def account_balance(self, account_id: str) -> dict[str, Any]:
+        ...
+
+    async def positions(self, account_id: str) -> list[dict[str, Any]]:
+        ...
+
 
 @dataclass(slots=True)
 class LiveMarketOrderRequest:
@@ -41,6 +57,8 @@ class LiveMarketOrderRequest:
     action: LiveIntentAction
     side: OrderSide
     quantity: float
+    execution_key: str = ""
+    virtual_order_ids: list[str] | None = None
 
 
 def validate_live_strategy_config(
@@ -70,6 +88,7 @@ def stable_client_order_id(
     side: OrderSide,
     webull_symbol: str,
     quantity: float,
+    execution_key: str = "",
 ) -> str:
     seed = "|".join(
         [
@@ -79,6 +98,7 @@ def stable_client_order_id(
             side.value,
             webull_symbol,
             _quantity_string(quantity),
+            execution_key,
         ]
     )
     return "wat" + sha256(seed.encode("utf-8")).hexdigest()[:29]
@@ -141,6 +161,7 @@ class WebullLiveExecutionAdapter:
             side=request.side,
             webull_symbol=request.strategy.webull_symbol,
             quantity=request.quantity,
+            execution_key=request.execution_key,
         )
         order_request = build_market_order_request(
             client_order_id=client_order_id,
@@ -161,6 +182,8 @@ class WebullLiveExecutionAdapter:
             account_alias=request.strategy.account_alias,
             account_id=account_id,
             client_order_id=client_order_id,
+            execution_key=request.execution_key,
+            virtual_order_ids=list(request.virtual_order_ids or []),
             request=order_request,
         )
         self.repository.upsert_live_order_intent(intent)
@@ -180,7 +203,7 @@ class WebullLiveExecutionAdapter:
             return intent
         except Exception as exc:
             intent.status = LiveIntentStatus.UNKNOWN
-            intent.error_message = str(exc)[:500] or type(exc).__name__
+            intent.error_message = _safe_error_message(exc, self.settings, account_id)
             self.repository.upsert_live_order_intent(intent)
             self.repository.log_live_reconciliation_event(
                 strategy_instance_id=request.strategy.id,
@@ -219,6 +242,11 @@ class WebullLiveExecutionAdapter:
             raise LiveExecutionBlocked("; ".join(errors))
         if request.quantity <= 0:
             raise LiveExecutionBlocked("quantity must be positive")
+        if (
+            request.strategy.asset_class.replace("-", "_").lower() in {"future", "futures"}
+            and not float(request.quantity).is_integer()
+        ):
+            raise LiveExecutionBlocked("futures quantity must be a positive whole contract")
         if self.repository.has_unresolved_live_intent(request.strategy.id):
             raise LiveExecutionBlocked("strategy has an unresolved live order intent")
 
@@ -237,3 +265,19 @@ def _instrument_type(asset_class: str) -> str:
 def _quantity_string(quantity: float) -> str:
     value = Decimal(str(quantity)).normalize()
     return format(value, "f")
+
+
+def _safe_error_message(
+    exc: Exception,
+    settings: Settings,
+    account_id: str,
+) -> str:
+    message = str(exc).strip() or type(exc).__name__
+    for secret in (
+        settings.webull_prod_app_key,
+        settings.webull_prod_app_secret,
+        account_id,
+    ):
+        if secret:
+            message = message.replace(secret, "<redacted>")
+    return message[:500]

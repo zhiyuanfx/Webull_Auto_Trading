@@ -9,6 +9,7 @@ from typing import Any
 from webull_auto_trading.config import Settings
 from webull_auto_trading.config_loader import load_strategy_instances
 from webull_auto_trading.domain import (
+    LiveAccountState,
     LiveIntentAction,
     LiveIntentStatus,
     OrderSide,
@@ -28,6 +29,7 @@ from webull_auto_trading.market_data import (
     MarketStreamBuffer,
     QuoteBook,
     parse_market_message,
+    parse_series_bars,
     validate_quote,
 )
 from webull_auto_trading.order_manager import PaperOrderBook
@@ -57,6 +59,7 @@ class RuntimeService:
         )
         self.risk = RiskController()
         self.strategies: dict[str, Strategy] = {"recycle_buy": RecycleBuyStrategy()}
+        self._restored_strategy_instances: set[str] = set()
 
     def initialize(self, *, seed_config: bool = True) -> None:
         self.repository.init_db()
@@ -153,11 +156,18 @@ class RuntimeService:
         return {**asdict(instance), "live_execution_errors": errors}
 
     def live_reconciliation_snapshot(self) -> dict[str, Any]:
+        intents: list[dict[str, Any]] = []
+        for item in self.repository.list_live_order_intents():
+            payload = asdict(item)
+            if payload.get("account_id"):
+                payload["account_id"] = "<redacted>"
+            intents.append(payload)
         return {
             "mode": self.active_mode().value,
             "master_enabled": self.settings.live_execution_master_enable,
-            "intents": [asdict(item) for item in self.repository.list_live_order_intents()],
+            "intents": intents,
             "events": self.repository.list_table("live_reconciliation_events"),
+            "symbols": self.repository.list_table("live_symbol_reconciliation"),
         }
 
     def flatten_strategy(self, strategy_id: str) -> dict[str, Any]:
@@ -267,7 +277,32 @@ class RuntimeService:
         if parsed.kind == "series" and isinstance(parsed.payload, dict):
             symbol = str(parsed.payload.get("code") or "")
             self.record_stream_message(symbol, "series", parsed.payload)
+            return self.ingest_series_payload(parsed.payload)
         return []
+
+    def ingest_series_payload(self, payload: dict[str, Any]) -> list[str]:
+        bars = parse_series_bars(payload)
+        if not bars:
+            return []
+        symbol = bars[0].symbol
+        messages: list[str] = []
+        book = (
+            self.live_virtual_book
+            if self.active_mode() == RuntimeMode.LIVE
+            else self.order_book
+        )
+        for instance in self.repository.list_strategy_instances():
+            if not instance.enabled or instance.symbol != symbol:
+                continue
+            strategy = self._strategy_for_instance(instance)
+            if strategy is None:
+                continue
+            produced = strategy.on_series(instance, bars, book)
+            messages.extend(self._record_strategy_messages(instance, produced))
+            self._persist_strategy_state(instance, strategy)
+        if self.active_mode() == RuntimeMode.LIVE:
+            self.repository.sync_live_virtual_state(self.live_virtual_book.orders)
+        return messages
 
     def record_stream_message(self, symbol: str, message_type: str, raw: dict[str, Any]) -> None:
         if not symbol:
@@ -315,7 +350,7 @@ class RuntimeService:
             if not decision.allowed:
                 messages.append(decision.reason)
                 continue
-            strategy = self.resolve_strategy(instance.strategy_name)
+            strategy = self._strategy_for_instance(instance)
             if strategy is None:
                 message = f"Unknown strategy: {instance.strategy_name}"
                 self.repository.log_activity(
@@ -335,6 +370,7 @@ class RuntimeService:
                     symbol=instance.symbol,
                 )
                 messages.append(message)
+            self._persist_strategy_state(instance, strategy)
         self.repository.sync_paper_state(
             self.order_book.orders,
             self.order_book.fills,
@@ -343,6 +379,7 @@ class RuntimeService:
         return messages
 
     def evaluate_live_quote(self, quote: QuoteState) -> list[str]:
+        self._hydrate_live_intent_outcomes()
         messages: list[str] = []
         for instance in self.repository.list_strategy_instances():
             if not instance.enabled or instance.symbol != quote.symbol:
@@ -365,7 +402,7 @@ class RuntimeService:
                 )
                 messages.append(message)
                 continue
-            strategy = self.resolve_strategy(instance.strategy_name)
+            strategy = self._strategy_for_instance(instance)
             if strategy is None:
                 message = f"Unknown strategy: {instance.strategy_name}"
                 self.repository.log_activity(
@@ -389,45 +426,203 @@ class RuntimeService:
                     symbol=instance.symbol,
                 )
                 messages.append(message)
+            self._persist_strategy_state(instance, strategy)
             self.repository.sync_live_virtual_state(self.live_virtual_book.orders)
-            for order in self.live_virtual_book.orders:
-                if order.strategy_instance_id != instance.id:
-                    continue
-                previous = before.get(order.id)
-                if previous is None and order.status == OrderStatus.FILLED:
-                    self._submit_live_virtual_order(
-                        instance=instance,
-                        order=order,
-                        action=LiveIntentAction.OPEN_MARKET,
-                        side=order.side,
-                    )
-                elif (
-                    previous is not None
-                    and previous[0] == OrderStatus.FILLED
-                    and order.status == OrderStatus.CLOSED
-                ):
-                    self._submit_live_virtual_order(
-                        instance=instance,
-                        order=order,
-                        action=LiveIntentAction.CLOSE_MARKET,
-                        side=_opposite_side(order.side),
-                    )
+            self._process_live_order_transitions(instance, before)
         return messages
 
-    def _submit_live_virtual_order(
+    def _hydrate_live_intent_outcomes(self) -> None:
+        intents = {
+            intent.id: intent
+            for intent in self.repository.list_live_order_intents()
+        }
+        changed = False
+        for order in self.live_virtual_book.orders:
+            intent_id = str(order.metadata.get("live_intent_id") or "")
+            intent = intents.get(intent_id)
+            if intent is None or intent.status != LiveIntentStatus.FILLED:
+                continue
+            if order.status == OrderStatus.OPENING:
+                fill_price = _intent_fill_price(intent.response)
+                if fill_price is None:
+                    continue
+                order.status = OrderStatus.OPEN
+                order.fill_price = fill_price
+                stop_distance = float(
+                    order.metadata.get("stop_loss_distance_price") or 0
+                )
+                take_distance = float(
+                    order.metadata.get("take_profit_distance_price") or 0
+                )
+                if stop_distance > 0:
+                    order.stop_loss = (
+                        fill_price - stop_distance
+                        if order.side == OrderSide.BUY
+                        else fill_price + stop_distance
+                    )
+                if take_distance > 0:
+                    order.take_profit = (
+                        fill_price + take_distance
+                        if order.side == OrderSide.BUY
+                        else fill_price - take_distance
+                    )
+                order.metadata["broker_fill_confirmed"] = True
+                order.metadata["risk_from_fill"] = True
+                order.metadata["live_status"] = LiveIntentStatus.FILLED.value
+                changed = True
+            elif order.status == OrderStatus.CLOSING:
+                order.status = OrderStatus.CLOSED
+                order.metadata["broker_close_fill_confirmed"] = True
+                order.metadata["live_status"] = LiveIntentStatus.FILLED.value
+                changed = True
+        if changed:
+            self.repository.sync_live_virtual_state(self.live_virtual_book.orders)
+
+    def ingest_live_account_state(self, account: LiveAccountState) -> list[str]:
+        messages: list[str] = []
+        for instance in self.repository.list_strategy_instances():
+            if (
+                not instance.enabled
+                or not instance.live_execution_enabled
+                or instance.account_alias != account.account_alias
+                or (
+                    account.strategy_instance_id
+                    and instance.id != account.strategy_instance_id
+                )
+            ):
+                continue
+            strategy = self._strategy_for_instance(instance)
+            if strategy is None:
+                continue
+            produced = strategy.on_account_snapshot(
+                instance,
+                account,
+                self.live_virtual_book,
+            )
+            messages.extend(self._record_strategy_messages(instance, produced))
+            self._persist_strategy_state(instance, strategy)
+        self.repository.sync_live_virtual_state(self.live_virtual_book.orders)
+        return messages
+
+    def evaluate_timers(self, *, now: datetime) -> list[str]:
+        messages: list[str] = []
+        live = self.active_mode() == RuntimeMode.LIVE
+        book = self.live_virtual_book if live else self.order_book
+        for instance in self.repository.list_strategy_instances():
+            if not instance.enabled:
+                continue
+            if live and not instance.live_execution_enabled:
+                continue
+            strategy = self._strategy_for_instance(instance)
+            if strategy is None:
+                continue
+            before = {
+                order.id: (order.status, dict(order.metadata))
+                for order in book.orders
+            }
+            quote = self.quote_book.get(instance.symbol)
+            produced = strategy.on_timer(instance, now, quote, book)
+            messages.extend(self._record_strategy_messages(instance, produced))
+            self._persist_strategy_state(instance, strategy)
+            if live:
+                self._process_live_order_transitions(instance, before)
+        if live:
+            self.repository.sync_live_virtual_state(book.orders)
+        else:
+            self.repository.sync_paper_state(
+                book.orders,
+                book.fills,
+                market_prices=self.current_market_prices(),
+            )
+        return messages
+
+    def market_subscription_requirements(self) -> list[dict[str, Any]]:
+        requirements: dict[str, dict[str, Any]] = {}
+        for instance in self.repository.list_strategy_instances():
+            if not instance.enabled:
+                continue
+            strategy = self._strategy_for_instance(instance)
+            items = (
+                strategy.subscription_requirements(instance)
+                if strategy is not None
+                else [{"code": instance.symbol, "type": "quote"}]
+            )
+            for item in items:
+                normalized = dict(item)
+                key = repr(sorted(normalized.items()))
+                requirements[key] = normalized
+        return [requirements[key] for key in sorted(requirements)]
+
+    def _process_live_order_transitions(
+        self,
+        instance,
+        before: dict[str, tuple[OrderStatus, dict[str, Any]]],
+    ) -> None:
+        openings: list[PaperOrder] = []
+        closing_groups: dict[tuple[str, OrderSide], list[PaperOrder]] = {}
+        for order in self.live_virtual_book.orders:
+            if order.strategy_instance_id != instance.id:
+                continue
+            previous = before.get(order.id)
+            previous_status = previous[0] if previous is not None else None
+            if order.status == OrderStatus.FILLED and previous_status in {
+                None,
+                OrderStatus.PENDING,
+            }:
+                openings.append(order)
+            elif order.status == OrderStatus.CLOSED and previous_status in {
+                OrderStatus.FILLED,
+                OrderStatus.OPEN,
+            }:
+                key = (order.cycle_id, _opposite_side(order.side))
+                closing_groups.setdefault(key, []).append(order)
+        for order in openings:
+            order.status = OrderStatus.OPENING
+            self._submit_live_virtual_orders(
+                instance=instance,
+                orders=[order],
+                action=LiveIntentAction.OPEN_MARKET,
+                side=order.side,
+            )
+        for (_cycle_id, side), orders in closing_groups.items():
+            for order in orders:
+                order.status = OrderStatus.CLOSING
+            reasons = {
+                str(order.metadata.get("close_reason") or "strategy")
+                for order in orders
+            }
+            action = (
+                LiveIntentAction.FLATTEN_MARKET
+                if reasons & {"session_close", "contract_force_exit", "daily_loss"}
+                else LiveIntentAction.CLOSE_MARKET
+            )
+            self._submit_live_virtual_orders(
+                instance=instance,
+                orders=orders,
+                action=action,
+                side=side,
+            )
+        self.repository.sync_live_virtual_state(self.live_virtual_book.orders)
+
+    def _submit_live_virtual_orders(
         self,
         *,
         instance,
-        order: PaperOrder,
+        orders: list[PaperOrder],
         action: LiveIntentAction,
         side: OrderSide,
     ) -> None:
+        if not orders:
+            return
+        execution_key = ":".join(sorted(order.id for order in orders))
         request = LiveMarketOrderRequest(
             strategy=instance,
-            cycle_id=order.cycle_id,
+            cycle_id=orders[0].cycle_id,
             action=action,
             side=side,
-            quantity=order.quantity,
+            quantity=sum(order.quantity for order in orders),
+            execution_key=execution_key,
+            virtual_order_ids=[order.id for order in orders],
         )
 
         async def submit() -> None:
@@ -438,11 +633,19 @@ class RuntimeService:
                     global_pause=self.risk.global_pause,
                 )
             except LiveExecutionBlocked as exc:
-                self._handle_live_submission_problem(instance, order, action, str(exc), "BLOCKED")
+                self._handle_live_submission_problem(
+                    instance,
+                    orders,
+                    action,
+                    str(exc),
+                    "BLOCKED",
+                )
                 return
-            order.metadata["live_intent_id"] = intent.id
-            order.metadata["client_order_id"] = intent.client_order_id
-            order.metadata["live_status"] = intent.status.value
+            for order in orders:
+                order.metadata["live_intent_id"] = intent.id
+                order.metadata["client_order_id"] = intent.client_order_id
+                order.metadata["execution_key"] = execution_key
+                order.metadata["live_status"] = intent.status.value
             self.repository.sync_live_virtual_state(self.live_virtual_book.orders)
             if intent.status in {
                 LiveIntentStatus.REJECTED,
@@ -451,7 +654,7 @@ class RuntimeService:
             }:
                 self._handle_live_submission_problem(
                     instance,
-                    order,
+                    orders,
                     action,
                     intent.error_message or f"live order status {intent.status.value}",
                     intent.status.value,
@@ -467,18 +670,19 @@ class RuntimeService:
     def _handle_live_submission_problem(
         self,
         instance,
-        order: PaperOrder,
+        orders: list[PaperOrder],
         action: LiveIntentAction,
         message: str,
         status: str,
     ) -> None:
-        if action == LiveIntentAction.OPEN_MARKET:
-            order.status = OrderStatus.CANCELLED
-        elif action == LiveIntentAction.CLOSE_MARKET:
-            order.status = OrderStatus.FILLED
-            order.closed_at = None
-        order.metadata["live_status"] = status
-        order.metadata["live_error"] = message
+        for order in orders:
+            if action == LiveIntentAction.OPEN_MARKET:
+                order.status = OrderStatus.ERROR
+            else:
+                order.status = OrderStatus.OPEN
+                order.closed_at = None
+            order.metadata["live_status"] = status
+            order.metadata["live_error"] = message
         self.repository.sync_live_virtual_state(self.live_virtual_book.orders)
         self.repository.update_strategy_instance(instance.id, {"enabled": False})
         self.repository.log_activity(
@@ -509,6 +713,33 @@ class RuntimeService:
             return None
         self.strategies[strategy_name] = strategy
         return strategy
+
+    def _strategy_for_instance(self, instance) -> Strategy | None:
+        strategy = self.resolve_strategy(instance.strategy_name)
+        if strategy is None:
+            return None
+        if instance.id not in self._restored_strategy_instances:
+            strategy.import_state(
+                instance,
+                self.repository.get_strategy_runtime_state(instance.id),
+            )
+            self._restored_strategy_instances.add(instance.id)
+        return strategy
+
+    def _persist_strategy_state(self, instance, strategy: Strategy) -> None:
+        state = strategy.export_state(instance)
+        if state:
+            self.repository.upsert_strategy_runtime_state(instance.id, state)
+
+    def _record_strategy_messages(self, instance, produced: list[str]) -> list[str]:
+        for message in produced:
+            self.repository.log_activity(
+                message,
+                message,
+                strategy_instance_id=instance.id,
+                symbol=instance.symbol,
+            )
+        return list(produced)
 
     def current_market_prices(self) -> dict[str, float]:
         prices: dict[str, float] = {}
@@ -551,3 +782,26 @@ def _opposite_side(side: OrderSide) -> OrderSide:
 
 def _strategy_class_name(strategy_name: str) -> str:
     return "".join(part.capitalize() for part in strategy_name.split("_")) + "Strategy"
+
+
+def _intent_fill_price(value: Any) -> float | None:
+    if isinstance(value, dict):
+        for key in ("filled_price", "avg_filled_price", "average_price"):
+            raw = value.get(key)
+            if raw not in (None, ""):
+                try:
+                    price = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if price > 0:
+                    return price
+        for nested in value.values():
+            price = _intent_fill_price(nested)
+            if price is not None:
+                return price
+    elif isinstance(value, list):
+        for nested in value:
+            price = _intent_fill_price(nested)
+            if price is not None:
+                return price
+    return None

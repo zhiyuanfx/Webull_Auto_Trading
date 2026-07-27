@@ -153,7 +153,14 @@ def diagnose_live_payload(settings: Settings | None = None) -> dict[str, Any]:
         "legacy_account_id_configured": bool(settings.webull_account_id),
         "live_execution_master_enabled": settings.live_execution_master_enable,
         "strategies": strategy_summaries,
-        "places_live_orders": False,
+        "live_order_path_available": True,
+        "places_live_orders": bool(
+            settings.live_execution_master_enable
+            and any(
+                strategy.enabled and strategy.live_execution_enabled
+                for strategy in strategies
+            )
+        ),
     }
 
 

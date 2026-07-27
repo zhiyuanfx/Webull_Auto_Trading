@@ -25,7 +25,7 @@ from webull_auto_trading.domain import (
     utc_now,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def encode_json(value: Any) -> str:
@@ -209,6 +209,8 @@ class RuntimeRepository:
                     account_alias TEXT NOT NULL,
                     account_id TEXT NOT NULL,
                     client_order_id TEXT NOT NULL,
+                    execution_key TEXT NOT NULL DEFAULT '',
+                    virtual_order_ids_json TEXT NOT NULL DEFAULT '[]',
                     status TEXT NOT NULL,
                     request_json TEXT NOT NULL DEFAULT '{}',
                     response_json TEXT NOT NULL DEFAULT '{}',
@@ -245,10 +247,27 @@ class RuntimeRepository:
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS strategy_runtime_state (
+                    strategy_instance_id TEXT PRIMARY KEY,
+                    state_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS live_symbol_reconciliation (
+                    account_alias TEXT NOT NULL,
+                    webull_symbol TEXT NOT NULL,
+                    external_baseline_quantity REAL NOT NULL DEFAULT 0,
+                    observed_position REAL NOT NULL DEFAULT 0,
+                    expected_position REAL NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'PENDING',
+                    error_message TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (account_alias, webull_symbol)
+                );
                 """
             )
             self._ensure_strategy_live_columns(conn)
             self._ensure_cycle_mode_column(conn)
+            self._ensure_live_intent_columns(conn)
             conn.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -292,6 +311,19 @@ class RuntimeRepository:
                 ON cycles(runtime_mode, opened_at)
             """
         )
+
+    def _ensure_live_intent_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(live_order_intents)").fetchall()
+        }
+        columns = {
+            "execution_key": "TEXT NOT NULL DEFAULT ''",
+            "virtual_order_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+        }
+        for name, definition in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE live_order_intents ADD COLUMN {name} {definition}")
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self.connect() as conn:
@@ -414,6 +446,8 @@ class RuntimeRepository:
             "live_order_intents",
             "live_reconciliation_events",
             "live_virtual_orders",
+            "live_symbol_reconciliation",
+            "strategy_runtime_state",
         }:
             raise ValueError(f"Unsupported table: {table}")
         with self.connect() as conn:
@@ -638,6 +672,36 @@ class RuntimeRepository:
                 )
             self._sync_cycles(conn, order_list, RuntimeMode.LIVE)
 
+    def get_strategy_runtime_state(self, strategy_instance_id: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT state_json FROM strategy_runtime_state
+                WHERE strategy_instance_id = ?
+                """,
+                (strategy_instance_id,),
+            ).fetchone()
+        return decode_json(row["state_json"], {}) if row else {}
+
+    def upsert_strategy_runtime_state(
+        self,
+        strategy_instance_id: str,
+        state: dict[str, Any],
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO strategy_runtime_state(
+                    strategy_instance_id, state_json, updated_at
+                )
+                VALUES (?, ?, ?)
+                ON CONFLICT(strategy_instance_id) DO UPDATE SET
+                    state_json=excluded.state_json,
+                    updated_at=excluded.updated_at
+                """,
+                (strategy_instance_id, encode_json(state), iso()),
+            )
+
     def upsert_live_order_intent(self, intent: LiveOrderIntent) -> LiveOrderIntent:
         intent.updated_at = utc_now()
         with self.connect() as conn:
@@ -646,12 +710,13 @@ class RuntimeRepository:
                 INSERT INTO live_order_intents(
                     id, strategy_instance_id, cycle_id, action, side, quantity,
                     market_data_symbol, webull_symbol, account_alias, account_id,
-                    client_order_id, status, request_json, response_json, error_message,
-                    created_at, updated_at
+                    client_order_id, execution_key, virtual_order_ids_json, status,
+                    request_json, response_json, error_message, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     status=excluded.status,
+                    virtual_order_ids_json=excluded.virtual_order_ids_json,
                     request_json=excluded.request_json,
                     response_json=excluded.response_json,
                     error_message=excluded.error_message,
@@ -669,6 +734,8 @@ class RuntimeRepository:
                     intent.account_alias,
                     intent.account_id,
                     intent.client_order_id,
+                    intent.execution_key,
+                    encode_json(intent.virtual_order_ids),
                     intent.status.value,
                     encode_json(intent.request),
                     encode_json(intent.response),
@@ -678,6 +745,60 @@ class RuntimeRepository:
                 ),
             )
         return intent
+
+    def get_live_symbol_reconciliation(
+        self,
+        account_alias: str,
+        webull_symbol: str,
+    ) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM live_symbol_reconciliation
+                WHERE account_alias = ? AND webull_symbol = ?
+                """,
+                (account_alias, webull_symbol),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_live_symbol_reconciliation(
+        self,
+        *,
+        account_alias: str,
+        webull_symbol: str,
+        external_baseline_quantity: float,
+        observed_position: float,
+        expected_position: float,
+        status: str,
+        error_message: str = "",
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO live_symbol_reconciliation(
+                    account_alias, webull_symbol, external_baseline_quantity,
+                    observed_position, expected_position, status, error_message, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_alias, webull_symbol) DO UPDATE SET
+                    external_baseline_quantity=excluded.external_baseline_quantity,
+                    observed_position=excluded.observed_position,
+                    expected_position=excluded.expected_position,
+                    status=excluded.status,
+                    error_message=excluded.error_message,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    account_alias,
+                    webull_symbol,
+                    external_baseline_quantity,
+                    observed_position,
+                    expected_position,
+                    status,
+                    error_message,
+                    iso(),
+                ),
+            )
 
     def list_live_order_intents(
         self,
@@ -840,7 +961,11 @@ class RuntimeRepository:
         open_positions: dict[tuple[str, str, str], dict[str, Any]] = {}
         for order in orders:
             if (
-                order.status not in (OrderStatus.FILLED, OrderStatus.CLOSED)
+                order.status not in (
+                    OrderStatus.FILLED,
+                    OrderStatus.OPEN,
+                    OrderStatus.CLOSED,
+                )
                 or order.fill_price is None
             ):
                 continue
@@ -1101,7 +1226,18 @@ class RuntimeRepository:
             by_cycle.setdefault(order.cycle_id, []).append(order)
         for cycle_id, cycle_orders in by_cycle.items():
             statuses = {order.status for order in cycle_orders}
-            status = "OPEN" if statuses & {OrderStatus.PENDING, OrderStatus.FILLED} else "COMPLETED"
+            status = (
+                "OPEN"
+                if statuses
+                & {
+                    OrderStatus.PENDING,
+                    OrderStatus.OPENING,
+                    OrderStatus.FILLED,
+                    OrderStatus.OPEN,
+                    OrderStatus.CLOSING,
+                }
+                else "COMPLETED"
+            )
             opened_at = min(
                 (
                     order.opened_at or order.closed_at or utc_now()
@@ -1235,6 +1371,8 @@ class RuntimeRepository:
             account_alias=row["account_alias"],
             account_id=row["account_id"],
             client_order_id=row["client_order_id"],
+            execution_key=row["execution_key"],
+            virtual_order_ids=decode_json(row["virtual_order_ids_json"], []),
             status=LiveIntentStatus(row["status"]),
             request=decode_json(row["request_json"], {}),
             response=decode_json(row["response_json"], {}),

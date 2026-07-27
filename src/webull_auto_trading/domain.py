@@ -49,9 +49,13 @@ class LiveIntentStatus(StrEnum):
 
 class OrderStatus(StrEnum):
     PENDING = "PENDING"
+    OPENING = "OPENING"
     FILLED = "FILLED"
+    OPEN = "OPEN"
+    CLOSING = "CLOSING"
     CANCELLED = "CANCELLED"
     CLOSED = "CLOSED"
+    ERROR = "ERROR"
 
 
 class OrderRole(StrEnum):
@@ -130,6 +134,18 @@ class QuoteState:
         if self.bid is None or self.ask is None:
             return None
         return (self.bid + self.ask) / 2.0
+
+
+@dataclass(slots=True)
+class LiveAccountState:
+    account_alias: str
+    total_net_liquidation_value: float
+    observed_at: datetime
+    strategy_instance_id: str = ""
+    positions: list[dict[str, Any]] = field(default_factory=list)
+    previews_ready: bool = False
+    reconciliation_ready: bool = False
+    reconciliation_error: str = ""
 
 
 @dataclass(slots=True)
@@ -227,6 +243,8 @@ class LiveOrderIntent:
     account_alias: str
     account_id: str
     client_order_id: str
+    execution_key: str = ""
+    virtual_order_ids: list[str] = field(default_factory=list)
     status: LiveIntentStatus = LiveIntentStatus.PENDING_SUBMIT
     request: dict[str, Any] = field(default_factory=dict)
     response: dict[str, Any] = field(default_factory=dict)

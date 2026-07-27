@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from itertools import count
 from typing import Any, Literal
 
-from webull_auto_trading.domain import MarketStreamMessage, QuoteState, utc_now
+from webull_auto_trading.domain import Bar, MarketStreamMessage, QuoteState, utc_now
 
 LIVE_ENDPOINT = "wss://realtime.insightsentry.com/live"
 FATAL_ERRORS = {
@@ -259,6 +259,80 @@ def build_quote_subscription_payload(api_key: str, symbols: list[str]) -> dict[s
     return {"api_key": api_key, "subscriptions": subscriptions}
 
 
+def build_complete_subscription_payload(
+    api_key: str,
+    subscriptions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw in subscriptions:
+        item = dict(raw)
+        code = str(item.get("code") or "").strip()
+        subscription_type = str(item.get("type") or "series").strip()
+        if not code:
+            continue
+        item["code"] = code
+        item["type"] = subscription_type
+        key = json.dumps(item, sort_keys=True, separators=(",", ":"))
+        normalized[key] = item
+    if not normalized:
+        raise ValueError("InsightSentry subscriptions cannot be empty")
+    ordered = sorted(
+        normalized.values(),
+        key=lambda item: (
+            str(item.get("code") or ""),
+            0 if item.get("type") == "quote" else 1,
+            str(item.get("bar_type") or ""),
+            int(item.get("bar_interval") or 1),
+            json.dumps(item, sort_keys=True, separators=(",", ":")),
+        ),
+    )
+    return {
+        "api_key": api_key,
+        "subscriptions": ordered,
+    }
+
+
+def parse_series_bars(payload: dict[str, Any]) -> list[Bar]:
+    symbol = str(payload.get("code") or payload.get("symbol") or "").strip()
+    raw_series = payload.get("series")
+    if not symbol or not isinstance(raw_series, list):
+        return []
+    raw_bar_type = str(payload.get("bar_type") or "hour")
+    bar_type, bar_interval = _parse_bar_type(raw_bar_type)
+    bars: list[Bar] = []
+    for item in raw_series:
+        if not isinstance(item, dict):
+            continue
+        timestamp = _float_or_none(item.get("time"))
+        open_price = _float_or_none(item.get("open"))
+        high = _float_or_none(item.get("high"))
+        low = _float_or_none(item.get("low"))
+        close = _float_or_none(item.get("close"))
+        volume = _float_or_none(item.get("volume")) or 0.0
+        if (
+            timestamp is None
+            or open_price is None
+            or high is None
+            or low is None
+            or close is None
+        ):
+            continue
+        bars.append(
+            Bar(
+                symbol=symbol,
+                bar_type=bar_type,
+                bar_interval=bar_interval,
+                time=datetime.fromtimestamp(timestamp, tz=UTC),
+                open=open_price,
+                high=high,
+                low=low,
+                close=close,
+                volume=volume,
+            )
+        )
+    return sorted(bars, key=lambda bar: bar.time)
+
+
 def parse_market_message(message: str) -> ParsedMarketMessage:
     if message == "pong":
         return ParsedMarketMessage("pong", "pong")
@@ -319,3 +393,21 @@ def _float_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_bar_type(value: str) -> tuple[str, int]:
+    normalized = value.strip().lower()
+    suffixes = {
+        "s": "second",
+        "m": "minute",
+        "h": "hour",
+        "d": "day",
+        "w": "week",
+    }
+    if normalized and normalized[-1:] in suffixes:
+        try:
+            interval = int(normalized[:-1])
+        except ValueError:
+            interval = 1
+        return suffixes[normalized[-1]], max(interval, 1)
+    return normalized or "hour", 1

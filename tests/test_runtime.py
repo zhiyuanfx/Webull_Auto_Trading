@@ -220,6 +220,9 @@ def test_live_quote_submits_open_and_virtual_close_market_orders(tmp_path) -> No
     )
     first_intent = runtime.repository.list_live_order_intents()[0]
     first_intent.status = LiveIntentStatus.FILLED
+    first_intent.response = {
+        "orders": [{"status": "FILLED", "filled_price": "101"}]
+    }
     runtime.repository.upsert_live_order_intent(first_intent)
     runtime.ingest_quote_item(
         {"code": "NASDAQ:AAPL", "bid": 106, "ask": 107, "last_price": 106.5, "delay_seconds": 0}
@@ -232,7 +235,7 @@ def test_live_quote_submits_open_and_virtual_close_market_orders(tmp_path) -> No
         "CLOSE_MARKET",
         "OPEN_MARKET",
     ]
-    assert runtime.repository.list_live_virtual_orders()[0].status == OrderStatus.CLOSED
+    assert runtime.repository.list_live_virtual_orders()[0].status == OrderStatus.CLOSING
     assert runtime.repository.list_cycles(RuntimeMode.LIVE)[0]["runtime_mode"] == "live"
 
 
@@ -249,7 +252,7 @@ def test_live_order_rejection_pauses_strategy(tmp_path) -> None:
     virtual_order = runtime.repository.list_live_virtual_orders()[0]
     assert instance.enabled is False
     assert intent.status == LiveIntentStatus.REJECTED
-    assert virtual_order.status == OrderStatus.CANCELLED
+    assert virtual_order.status == OrderStatus.ERROR
     assert virtual_order.metadata["live_status"] == "REJECTED"
 
 

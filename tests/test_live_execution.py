@@ -87,6 +87,30 @@ def test_stable_client_order_id_is_deterministic_and_short_enough() -> None:
     assert len(first) == 32
 
 
+def test_stable_client_order_id_separates_virtual_execution_legs() -> None:
+    first = stable_client_order_id(
+        strategy_instance_id="st-1",
+        cycle_id="cyc-1",
+        action=LiveIntentAction.OPEN_MARKET,
+        side=OrderSide.BUY,
+        webull_symbol="MGCQ6",
+        quantity=1,
+        execution_key="main",
+    )
+    add_on = stable_client_order_id(
+        strategy_instance_id="st-1",
+        cycle_id="cyc-1",
+        action=LiveIntentAction.OPEN_MARKET,
+        side=OrderSide.BUY,
+        webull_symbol="MGCQ6",
+        quantity=1,
+        execution_key="add-1",
+    )
+
+    assert first != add_on
+    assert len(first) == len(add_on) == 32
+
+
 def test_live_adapter_persists_intent_before_submit(tmp_path) -> None:
     repo = RuntimeRepository(tmp_path / "runtime.sqlite3")
     repo.init_db()

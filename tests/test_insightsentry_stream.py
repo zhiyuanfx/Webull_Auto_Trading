@@ -7,9 +7,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from webull_auto_trading.config import Settings
-from webull_auto_trading.domain import StrategyInstance
+from webull_auto_trading.domain import QuoteState, StrategyInstance
 from webull_auto_trading.insightsentry_stream import InsightSentryQuoteStreamService
+from webull_auto_trading.order_manager import PaperOrderBook
 from webull_auto_trading.runtime import RuntimeService
+from webull_auto_trading.strategy.base import Strategy
 
 
 def test_stream_status_is_disabled_without_credentials(tmp_path) -> None:
@@ -98,6 +100,68 @@ def test_stream_rejects_expired_cached_websocket_key(tmp_path) -> None:
         await service.stop()
 
         assert service.status()["last_error"] == "INSIGHTSENTRY_WEBSOCKET_KEY is expired"
+
+    asyncio.run(scenario())
+
+
+def test_stream_sends_complete_fixed_contract_hourly_requirements(tmp_path) -> None:
+    class FixedContractStrategy(Strategy):
+        def subscription_requirements(self, instance: StrategyInstance) -> list[dict[str, Any]]:
+            return [
+                {"code": instance.symbol, "type": "quote"},
+                {
+                    "code": instance.symbol,
+                    "type": "series",
+                    "bar_type": "hour",
+                    "bar_interval": 1,
+                    "max_dp": 72,
+                    "badj": False,
+                    "settlement": False,
+                },
+            ]
+
+        def on_quote(
+            self,
+            instance: StrategyInstance,
+            quote: QuoteState,
+            order_book: PaperOrderBook,
+        ) -> list[str]:
+            return []
+
+    async def scenario() -> None:
+        runtime = make_runtime(tmp_path, insightsentry_api_key="direct-key")
+        runtime.strategies["fixed_contract"] = FixedContractStrategy()
+        runtime.repository.upsert_strategy_instance(
+            StrategyInstance(
+                id="st-mgc",
+                strategy_name="fixed_contract",
+                symbol="COMEX_MINI:MGCQ2026",
+            )
+        )
+        socket = MockWebSocket([])
+        service = InsightSentryQuoteStreamService(
+            runtime,
+            connect_factory=lambda *_args, **_kwargs: MockWebSocketContext(socket),
+            poll_seconds=0.01,
+        )
+
+        service.start()
+        await wait_until(lambda: bool(socket.sent))
+        await service.stop()
+
+        payload = json.loads(socket.sent[0])
+        assert payload["subscriptions"] == [
+            {"code": "COMEX_MINI:MGCQ2026", "type": "quote"},
+            {
+                "badj": False,
+                "bar_interval": 1,
+                "bar_type": "hour",
+                "code": "COMEX_MINI:MGCQ2026",
+                "max_dp": 72,
+                "settlement": False,
+                "type": "series",
+            },
+        ]
 
     asyncio.run(scenario())
 

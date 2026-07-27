@@ -13,7 +13,7 @@ from webull_auto_trading.domain import utc_now
 from webull_auto_trading.market_data import (
     LIVE_ENDPOINT,
     ParsedMarketMessage,
-    build_quote_subscription_payload,
+    build_complete_subscription_payload,
     parse_market_message,
 )
 from webull_auto_trading.runtime import RuntimeService
@@ -107,7 +107,14 @@ class InsightSentryQuoteStreamService:
         attempt = 0
         while not self._stop.is_set():
             api_key, credential_error = self._resolve_api_key()
-            desired_symbols = self._desired_symbols()
+            desired_subscriptions = self.runtime.market_subscription_requirements()
+            desired_symbols = sorted(
+                {
+                    str(item.get("code") or "")
+                    for item in desired_subscriptions
+                    if str(item.get("code") or "")
+                }
+            )
             self._status.desired_symbols = desired_symbols
             if not api_key:
                 self._set_status(
@@ -142,7 +149,11 @@ class InsightSentryQuoteStreamService:
             try:
                 state: STREAM_STATES = "connecting" if attempt == 0 else "reconnecting"
                 self._set_status(state, connected=False, reconnect_attempt=attempt)
-                await self._connect_and_consume(api_key, desired_symbols)
+                await self._connect_and_consume(
+                    api_key,
+                    desired_symbols,
+                    desired_subscriptions,
+                )
                 attempt = 0
             except asyncio.CancelledError:
                 raise
@@ -167,8 +178,13 @@ class InsightSentryQuoteStreamService:
                 )
                 await self._wait_or_stop(delay)
 
-    async def _connect_and_consume(self, api_key: str, symbols: list[str]) -> None:
-        payload = build_quote_subscription_payload(api_key, symbols)
+    async def _connect_and_consume(
+        self,
+        api_key: str,
+        symbols: list[str],
+        subscriptions: list[dict[str, Any]],
+    ) -> None:
+        payload = build_complete_subscription_payload(api_key, subscriptions)
         async with self._connect() as websocket:
             self._socket = websocket
             await websocket.send(json.dumps(payload, separators=(",", ":")))
@@ -185,7 +201,7 @@ class InsightSentryQuoteStreamService:
                 payload={"symbols": symbols},
             )
             while not self._stop.is_set():
-                if self._should_replace_connection(api_key, symbols):
+                if self._should_replace_connection(api_key, subscriptions):
                     self._log_activity_once(
                         "InsightSentryStreamReplacing",
                         "InsightSentry quote stream reconnecting to replace subscriptions",
@@ -250,9 +266,16 @@ class InsightSentryQuoteStreamService:
             payload=payload,
         )
 
-    def _should_replace_connection(self, api_key: str, symbols: list[str]) -> bool:
+    def _should_replace_connection(
+        self,
+        api_key: str,
+        subscriptions: list[dict[str, Any]],
+    ) -> bool:
         current_key, _credential_error = self._resolve_api_key()
-        return current_key != api_key or self._desired_symbols() != symbols
+        return (
+            current_key != api_key
+            or self.runtime.market_subscription_requirements() != subscriptions
+        )
 
     def _desired_symbols(self) -> list[str]:
         return sorted(

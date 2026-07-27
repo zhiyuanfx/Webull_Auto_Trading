@@ -7,8 +7,10 @@ console.
 
 Runtime mode is global: `test` mode paper trades against real InsightSentry market data, and
 `live` mode allows Webull account/balance/position/open-order reads through the official SDK.
-It also has named account aliases, live strategy metadata, and persisted live order intent
-scaffolding. Runtime strategy decisions still do not transmit live orders.
+It also has named account aliases, persisted live order intents, fill-confirmed tagged
+allocations, and safety-gated market-order execution. Live transmission remains blocked
+unless the global mode, environment master switch, per-strategy switch, account alias,
+read-only previews, fresh quote/account state, and broker reconciliation are all ready.
 
 ## Quick Start
 
@@ -68,7 +70,8 @@ webull-auto-trading run
 webull-auto-trading cleanup --dry-run
 ```
 
-`serve` starts the local backend and InsightSentry quote stream worker on
+`serve` starts the local backend, InsightSentry market stream worker, and periodic live
+safety/reconciliation coordinator on
 <http://127.0.0.1:8765> by default. The API remains usable if stream credentials are missing
 or the stream is reconnecting. The frontend lives in `frontend/` and proxies `/api` to that
 backend during Vite development.
@@ -90,6 +93,24 @@ Add real strategies there, not through the UI. Keep real symbols, private strate
 and tuned parameters out of git. The tracked public strategy package includes only the base
 interface, package init, and the disclosed `recycle_buy` demo; private strategy modules can
 live beside it as ignored local files.
+
+Strategies may request quote and complete replacement series subscriptions, consume live
+account snapshots, export control state, and run timer-based safety checks. Quotes and OHLC
+bars stay in memory. Durable strategy state must contain only control data such as session
+identity, cycle counts, cooldowns, account-equity baselines, and active allocation counters.
+
+Live futures brackets are virtual because Webull does not support futures OCO/OTOCO
+combinations. A virtual trigger submits a gated market order, then remains `OPENING` until
+Order Detail confirms the fill. Confirmed allocations become `OPEN`, use the actual fill
+price for risk levels, pass through `CLOSING`, and become `CLOSED` only after the exit fill.
+Rejected, cancelled, unknown, or mismatched mutations pause the affected strategy. An
+unexplained aggregate position mismatch pauses every strategy sharing that account alias
+and Webull symbol; the runtime never auto-adopts or auto-flattens the mismatch.
+
+CME-relative strategies should express their daily open/close in a named time zone rather
+than fixed machine-local windows. Their periodic safety checks must cancel virtual entries
+and create strategy-only grouped exits before the maintenance break and enforce any
+contract-specific last-entry and force-exit timestamps.
 
 ## Verification
 

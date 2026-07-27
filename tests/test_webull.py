@@ -75,3 +75,36 @@ def test_order_history_uses_official_sdk_order_method() -> None:
     result = asyncio.run(client.order_history("acct-1"))
 
     assert result == [{"client_order_id": "client-1"}]
+
+
+def test_preview_and_order_detail_use_official_sdk_methods() -> None:
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, str]:
+            return {"status": "FILLED"}
+
+    class OrderV3:
+        def preview_order(self, account_id: str, orders: list[dict]) -> Response:
+            assert account_id == "acct-1"
+            assert orders[0]["symbol"] == "MGCQ6"
+            return Response()
+
+        def get_order_detail(
+            self,
+            account_id: str,
+            client_order_id: str,
+        ) -> Response:
+            assert account_id == "acct-1"
+            assert client_order_id == "client-1"
+            return Response()
+
+    client = WebullTradingClient(Settings(_env_file=None))
+    client._client = type("TradeClient", (), {"order_v3": OrderV3()})()
+
+    preview = asyncio.run(client.preview_order("acct-1", {"symbol": "MGCQ6"}))
+    detail = asyncio.run(client.order_detail("acct-1", "client-1"))
+
+    assert preview == {"status": "FILLED"}
+    assert detail == {"status": "FILLED"}

@@ -12,6 +12,7 @@ from webull_auto_trading.config import get_settings
 from webull_auto_trading.domain import RuntimeMode
 from webull_auto_trading.execution import AccountSnapshot, LiveOrdersSnapshot, WebullReadService
 from webull_auto_trading.insightsentry_stream import InsightSentryQuoteStreamService
+from webull_auto_trading.live_reconciliation import LiveRuntimeCoordinator
 from webull_auto_trading.runtime import RuntimeService
 
 
@@ -51,6 +52,11 @@ def get_stream_service() -> InsightSentryQuoteStreamService:
     return InsightSentryQuoteStreamService(get_runtime())
 
 
+@lru_cache
+def get_live_coordinator() -> LiveRuntimeCoordinator:
+    return LiveRuntimeCoordinator(get_runtime())
+
+
 LIVE_ACCOUNT_CACHE: dict[str, AccountSnapshot] = {}
 LIVE_ORDERS_CACHE: dict[str, LiveOrdersSnapshot] = {}
 
@@ -59,10 +65,13 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         stream_service = get_stream_service()
+        live_coordinator = get_live_coordinator()
         stream_service.start()
+        live_coordinator.start()
         try:
             yield
         finally:
+            await live_coordinator.stop()
             await stream_service.stop()
 
     app = FastAPI(title="Webull Auto Trading Runtime", lifespan=lifespan)

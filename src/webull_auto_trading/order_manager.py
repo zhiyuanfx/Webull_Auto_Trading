@@ -40,7 +40,7 @@ class PaperOrderBook:
             order
             for order in self.orders
             if order.strategy_instance_id == strategy_instance_id
-            and order.status == OrderStatus.FILLED
+            and order.status in {OrderStatus.FILLED, OrderStatus.OPEN}
         ]
 
     def place_virtual_stop(
@@ -192,7 +192,10 @@ class PaperOrderBook:
         if quote.bid is None or quote.ask is None:
             return closed
         for order in self.orders:
-            if order.symbol != quote.symbol or order.status != OrderStatus.FILLED:
+            if order.symbol != quote.symbol or order.status not in {
+                OrderStatus.FILLED,
+                OrderStatus.OPEN,
+            }:
                 continue
             if order.stop_loss is None:
                 continue
@@ -219,7 +222,7 @@ class PaperOrderBook:
         return closed
 
     def move_stop(self, order: PaperOrder, new_stop_loss: float) -> bool:
-        if order.status != OrderStatus.FILLED:
+        if order.status not in {OrderStatus.FILLED, OrderStatus.OPEN}:
             return False
         if order.side == OrderSide.BUY:
             if order.stop_loss is not None and new_stop_loss <= order.stop_loss:

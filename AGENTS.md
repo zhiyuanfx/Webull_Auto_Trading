@@ -8,8 +8,8 @@
 4. For Webull behavior, fetch the current official `developer.webull.com` page. Never
    guess endpoint fields, enums, SDK method names, hosts, or entitlement behavior.
 5. Ordinary tests must not call Webull, InsightSentry, or place live orders. Live order
-   transmission only happens through explicit user operation of future trading runtime code
-   with safety switches enabled.
+   transmission only happens through explicit user operation of the runtime with all safety
+   switches and readiness gates enabled.
 
 ## Architecture
 
@@ -20,11 +20,14 @@
   runtime commands.
 - `src/webull_auto_trading/runtime.py`: Test/Live local runtime coordinator.
 - `src/webull_auto_trading/live_execution.py`: live order intent model, Webull market-order request
-  construction, and safety-gated adapter scaffolding.
+  construction, unique execution-leg IDs, and safety-gated submission adapter.
+- `src/webull_auto_trading/live_reconciliation.py`: periodic safety evaluation, read-only
+  previews, Order Detail fill reconciliation, balance/position refresh, tagged allocation
+  reconciliation, and mismatch pauses.
 - `src/webull_auto_trading/market_data.py`: InsightSentry quote merge, subscription, and
   rejection rules.
-- `src/webull_auto_trading/insightsentry_stream.py`: production InsightSentry quote
-  WebSocket service and safe stream status.
+- `src/webull_auto_trading/insightsentry_stream.py`: production InsightSentry quote/series
+  WebSocket service, complete replacement subscriptions, and safe stream status.
 - `src/webull_auto_trading/strategy/recycle_buy.py`: simple Test-mode paper recycle-buy EA.
 - `src/webull_auto_trading/strategy/`: tracks only the base interface, package init, and
   disclosed demo strategies; real strategy modules are local/ignored.
@@ -51,8 +54,18 @@ and user request.
   in-flight, account alias, and reconciliation gates pass.
 - Strategy instances do not expose public per-strategy execution modes.
 - Market quote/series display is process-memory only; do not persist new quote or bar data.
-- There is no external-alert intake, local simulator, alternate trading environment, or live
-  order worker in this baseline.
+- There is no external-alert intake, local simulator, or alternate trading environment.
+- Live allocations use explicit `OPENING`, `OPEN`, `CLOSING`, `CLOSED`, and error states.
+  Risk levels are calculated from confirmed Webull fill prices, not virtual trigger prices.
+- Webull aggregate positions reconcile against signed tagged allocations plus a captured
+  external baseline. Unexplained mismatches pause all strategies sharing the account alias
+  and symbol; never auto-adopt or auto-flatten a mismatch.
+- Futures OCO/OTOCO brackets stay local and virtual. Grouped exits may close only the
+  triggering strategy's confirmed allocation quantity.
+- Account balance and positions refresh every five seconds; new entries require account data
+  no older than 15 seconds. Use `total_net_liquidation_value` for account-wide loss gates.
+- Session-relative strategies use named exchange time zones and periodic safety evaluation
+  so maintenance exits and contract cutoffs do not depend on an exact quote tick.
 - Real strategy modules and real strategy config files are local/ignored. Keep examples
   tracked, then copy them to ignored local files before operating the runtime.
 - Keep trading logic separate from market-data logic when future runtime code is added.
@@ -68,7 +81,7 @@ webull-auto-trading diagnose-live
 webull-auto-trading accounts
 webull-auto-trading init-db
 webull-auto-trading cleanup --dry-run
-webull-auto-trading serve --reload  # starts API plus one InsightSentry quote stream worker
+webull-auto-trading serve --reload  # starts API, market stream, and live safety/reconciliation
 webull-auto-trading run
 python -m pytest
 ruff check .
