@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 from webull_auto_trading.domain import QuoteState
@@ -145,6 +146,25 @@ def test_parse_market_message_classifies_heartbeat_quote_and_fatal_error() -> No
     assert parse_market_message('{"server_time":1741397070281}').kind == "heartbeat"
     assert parse_market_message('{"data":[{"code":"NASDAQ:AAPL"}]}').kind == "quote"
     assert parse_market_message('{"code":"NASDAQ:AAPL","bid":100.0}').kind == "quote"
+    initial_series = parse_market_message(
+        json.dumps(
+            {
+                "code": "COMEX_MINI:MGCQ2026",
+                "bar_type": "1D",
+                "last_update": 1_785_190_000_000,
+                "series": [
+                    {
+                        "time": 1_785_103_200,
+                        "open": 4095.0,
+                        "high": 4119.5,
+                        "low": 4067.0,
+                        "close": 4078.9,
+                    }
+                ],
+            }
+        )
+    )
+    assert initial_series.kind == "series"
     error = parse_market_message('{"error":"server_busy","message":"retry"}')
 
     assert error.kind == "error"

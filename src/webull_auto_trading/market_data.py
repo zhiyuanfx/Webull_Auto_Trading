@@ -351,14 +351,14 @@ def parse_market_message(message: str) -> ParsedMarketMessage:
         )
     if isinstance(payload, dict) and "data" in payload and isinstance(payload["data"], list):
         return ParsedMarketMessage("quote", payload)
+    if isinstance(payload, dict) and "series" in payload:
+        return ParsedMarketMessage("series", payload)
     if (
         isinstance(payload, dict)
         and str(payload.get("code") or payload.get("symbol") or "").strip()
         and any(field in payload for field in QUOTE_PATCH_FIELDS)
     ):
         return ParsedMarketMessage("quote", payload)
-    if isinstance(payload, dict) and "series" in payload:
-        return ParsedMarketMessage("series", payload)
     if isinstance(payload, dict) and "message" in payload:
         return ParsedMarketMessage("info", payload)
     return ParsedMarketMessage("unknown", payload)
