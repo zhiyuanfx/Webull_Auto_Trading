@@ -6,8 +6,10 @@ from typing import Any
 
 from webull_auto_trading.domain import (
     IntentType,
+    LiveAccountState,
     OrderRole,
     OrderSide,
+    OrderStatus,
     QuoteState,
     StrategyInstance,
     new_id,
@@ -43,6 +45,10 @@ class RecycleBuyParams:
 class RecycleBuyState:
     active_cycle_id: str | None = None
     next_trade_time: datetime | None = None
+    account_observed_at: datetime | None = None
+    previews_ready: bool = False
+    reconciliation_ready: bool = False
+    reconciliation_error: str = ""
 
 
 class RecycleBuyStrategy(Strategy):
@@ -56,6 +62,20 @@ class RecycleBuyStrategy(Strategy):
             self.states[instance.id] = state
         return state
 
+    def on_account_snapshot(
+        self,
+        instance: StrategyInstance,
+        account: LiveAccountState,
+        order_book: PaperOrderBook,
+    ) -> list[str]:
+        del order_book
+        state = self.state_for(instance)
+        state.account_observed_at = account.observed_at
+        state.previews_ready = account.previews_ready
+        state.reconciliation_ready = account.reconciliation_ready
+        state.reconciliation_error = account.reconciliation_error
+        return []
+
     def on_quote(
         self,
         instance: StrategyInstance,
@@ -68,23 +88,57 @@ class RecycleBuyStrategy(Strategy):
         now = utc_now()
         messages: list[str] = []
 
-        closed = order_book.manage_stops(quote)
+        closed = order_book.manage_stops(
+            quote,
+            strategy_instance_id=instance.id,
+        )
         if closed:
             state.active_cycle_id = None
             state.next_trade_time = now + timedelta(seconds=params.cooldown_seconds)
             messages.append(IntentType.CLOSE_CYCLE.value)
 
-        if order_book.open_for_instance(instance.id) or order_book.pending_for_instance(
-            instance.id
-        ):
+        active = [
+            order
+            for order in order_book.orders
+            if order.strategy_instance_id == instance.id
+            and order.status
+            in {
+                OrderStatus.PENDING,
+                OrderStatus.OPENING,
+                OrderStatus.FILLED,
+                OrderStatus.OPEN,
+                OrderStatus.CLOSING,
+            }
+        ]
+        if active:
+            state.active_cycle_id = active[0].cycle_id
             return messages
+        state.active_cycle_id = None
+        if state.next_trade_time is None:
+            latest_closed = max(
+                (
+                    order
+                    for order in order_book.orders
+                    if order.strategy_instance_id == instance.id
+                    and order.status == OrderStatus.CLOSED
+                    and order.closed_at is not None
+                ),
+                key=lambda order: order.closed_at,
+                default=None,
+            )
+            if latest_closed is not None and latest_closed.closed_at is not None:
+                state.next_trade_time = latest_closed.closed_at + timedelta(
+                    seconds=params.cooldown_seconds
+                )
         if state.next_trade_time is not None and now < state.next_trade_time:
+            return messages
+        if instance.live_execution_enabled and not self._live_entry_ready(state, now):
             return messages
         if quote.ask is None:
             return messages
 
         state.active_cycle_id = new_id("cyc")
-        order_book.place_market_order(
+        order = order_book.place_market_order(
             strategy_instance_id=instance.id,
             cycle_id=state.active_cycle_id,
             symbol=instance.symbol,
@@ -95,6 +149,50 @@ class RecycleBuyStrategy(Strategy):
             stop_loss=quote.ask - params.stop_loss_distance_price,
             take_profit=quote.ask + params.take_profit_distance_price,
         )
+        order.metadata.update(
+            {
+                "stop_loss_distance_price": params.stop_loss_distance_price,
+                "take_profit_distance_price": params.take_profit_distance_price,
+            }
+        )
         messages.append(IntentType.PLACE_MARKET_ORDER.value)
         messages.append(IntentType.PAPER_FILL.value)
         return messages
+
+    def export_state(self, instance: StrategyInstance) -> dict[str, Any]:
+        state = self.state_for(instance)
+        return {
+            "active_cycle_id": state.active_cycle_id,
+            "next_trade_time": (
+                state.next_trade_time.isoformat()
+                if state.next_trade_time is not None
+                else None
+            ),
+        }
+
+    def import_state(self, instance: StrategyInstance, state: dict[str, Any]) -> None:
+        next_trade_time = state.get("next_trade_time")
+        parsed_next_trade_time = (
+            datetime.fromisoformat(next_trade_time)
+            if isinstance(next_trade_time, str) and next_trade_time
+            else None
+        )
+        self.states[instance.id] = RecycleBuyState(
+            active_cycle_id=(
+                str(state["active_cycle_id"])
+                if state.get("active_cycle_id")
+                else None
+            ),
+            next_trade_time=parsed_next_trade_time,
+        )
+
+    @staticmethod
+    def _live_entry_ready(state: RecycleBuyState, now: datetime) -> bool:
+        observed_at = state.account_observed_at
+        if observed_at is None or now - observed_at > timedelta(seconds=15):
+            return False
+        return (
+            state.previews_ready
+            and state.reconciliation_ready
+            and not state.reconciliation_error
+        )

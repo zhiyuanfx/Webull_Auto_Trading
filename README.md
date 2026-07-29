@@ -94,6 +94,14 @@ and tuned parameters out of git. The tracked public strategy package includes on
 interface, package init, and the disclosed `recycle_buy` demo; private strategy modules can
 live beside it as ignored local files.
 
+`recycle_buy` works in Test mode and through the existing gated Live market-order path. A
+Live entry waits for fresh account data, successful BUY/SELL previews, and ready position
+reconciliation. It treats every in-flight allocation state as active so a second quote
+cannot create a duplicate entry, scopes stop/target handling to its own strategy instance,
+and recalculates risk levels from the confirmed Webull fill. Its cooldown state is durable,
+but the strategy intentionally has no daily cycle limit, trading window, or contract cutoff.
+Keep a new Live instance paused until those operating limits are acceptable.
+
 Pausing one strategy from the operator console cancels only that instance's local pending
 virtual entries and preserves them as `CANCELLED` history in the test or live virtual-order
 store. It does not cancel a Webull order or close broker exposure, and the disabled strategy

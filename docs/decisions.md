@@ -49,10 +49,15 @@ virtual pending orders, and close paper positions only when an in-memory current
 provides the documented paper close side. Live mode rejects broad flatten; live exits are
 produced by the same gated strategy close path that submits Webull market orders.
 
-The tracked public strategy package includes `recycle_buy`, a deliberately small paper-only
-helper EA that opens an immediate BUY on each valid quote, attaches fixed stop-loss/take-
-profit distances, and waits for a configured cooldown after the position closes before
-opening again.
+The tracked public strategy package includes `recycle_buy`, a deliberately small Test/Live
+helper EA that opens an immediate BUY on each eligible quote, attaches fixed stop-loss/take-
+profit distances, and waits for a durable configured cooldown after the position closes
+before opening again. In Live mode it uses only the shared gated market-order path: entry
+requires fresh account state plus successful previews and reconciliation, `OPENING` and
+`CLOSING` block re-entry, and stop/target distances are rebased to the confirmed broker fill.
+Local stop management is strategy-instance scoped so same-symbol strategies cannot mutate
+one another. The helper intentionally does not add daily cycle, session-window, or contract-
+cutoff controls.
 
 Real strategy modules live next to the tracked demo strategy but are ignored by git. The
 runtime resolves private strategies by importing `webull_auto_trading.strategy.<name>` and

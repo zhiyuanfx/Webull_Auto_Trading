@@ -187,11 +187,21 @@ class PaperOrderBook:
             fills.append(fill)
         return fills
 
-    def manage_stops(self, quote: QuoteState) -> list[PaperOrder]:
+    def manage_stops(
+        self,
+        quote: QuoteState,
+        *,
+        strategy_instance_id: str | None = None,
+    ) -> list[PaperOrder]:
         closed: list[PaperOrder] = []
         if quote.bid is None or quote.ask is None:
             return closed
         for order in self.orders:
+            if (
+                strategy_instance_id is not None
+                and order.strategy_instance_id != strategy_instance_id
+            ):
+                continue
             if order.symbol != quote.symbol or order.status not in {
                 OrderStatus.FILLED,
                 OrderStatus.OPEN,

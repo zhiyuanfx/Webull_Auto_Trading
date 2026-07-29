@@ -4,6 +4,7 @@ import types
 
 from webull_auto_trading.config import Settings
 from webull_auto_trading.domain import (
+    LiveAccountState,
     LiveIntentStatus,
     OrderRole,
     OrderSide,
@@ -12,6 +13,7 @@ from webull_auto_trading.domain import (
     RuntimeMode,
     StrategyInstance,
     new_id,
+    utc_now,
 )
 from webull_auto_trading.order_manager import PaperOrderBook
 from webull_auto_trading.runtime import RuntimeService
@@ -413,6 +415,7 @@ def test_live_quote_submits_open_and_virtual_close_market_orders(tmp_path) -> No
     client = FakeLiveOrderClient()
     runtime = make_live_runtime(tmp_path, client)
     runtime.repository.upsert_strategy_instance(live_strategy())
+    mark_live_strategy_ready(runtime)
 
     runtime.ingest_quote_item(
         {"code": "NASDAQ:AAPL", "bid": 100, "ask": 101, "last_price": 100.5, "delay_seconds": 0}
@@ -420,11 +423,11 @@ def test_live_quote_submits_open_and_virtual_close_market_orders(tmp_path) -> No
     first_intent = runtime.repository.list_live_order_intents()[0]
     first_intent.status = LiveIntentStatus.FILLED
     first_intent.response = {
-        "orders": [{"status": "FILLED", "filled_price": "101"}]
+        "orders": [{"status": "FILLED", "filled_price": "102"}]
     }
     runtime.repository.upsert_live_order_intent(first_intent)
     runtime.ingest_quote_item(
-        {"code": "NASDAQ:AAPL", "bid": 106, "ask": 107, "last_price": 106.5, "delay_seconds": 0}
+        {"code": "NASDAQ:AAPL", "bid": 107, "ask": 108, "last_price": 107.5, "delay_seconds": 0}
     )
 
     assert [order["side"] for _account_id, order in client.orders] == ["BUY", "SELL"]
@@ -434,13 +437,41 @@ def test_live_quote_submits_open_and_virtual_close_market_orders(tmp_path) -> No
         "CLOSE_MARKET",
         "OPEN_MARKET",
     ]
-    assert runtime.repository.list_live_virtual_orders()[0].status == OrderStatus.CLOSING
+    virtual_order = runtime.repository.list_live_virtual_orders()[0]
+    assert virtual_order.status == OrderStatus.CLOSING
+    assert virtual_order.fill_price == 102
+    assert virtual_order.stop_loss == 97
+    assert virtual_order.take_profit == 107
+    assert virtual_order.metadata["risk_from_fill"] is True
     assert runtime.repository.list_cycles(RuntimeMode.LIVE)[0]["runtime_mode"] == "live"
+
+
+def test_live_recycle_buy_does_not_submit_twice_while_opening(tmp_path) -> None:
+    client = FakeLiveOrderClient()
+    runtime = make_live_runtime(tmp_path, client)
+    runtime.repository.upsert_strategy_instance(live_strategy())
+    mark_live_strategy_ready(runtime)
+    quote_item = {
+        "code": "NASDAQ:AAPL",
+        "bid": 100,
+        "ask": 101,
+        "last_price": 100.5,
+        "delay_seconds": 0,
+    }
+
+    runtime.ingest_quote_item(quote_item)
+    runtime.ingest_quote_item(quote_item)
+
+    assert len(client.orders) == 1
+    assert len(runtime.repository.list_live_order_intents()) == 1
+    assert len(runtime.repository.list_live_virtual_orders()) == 1
+    assert runtime.repository.list_live_virtual_orders()[0].status == OrderStatus.OPENING
 
 
 def test_live_order_rejection_pauses_strategy(tmp_path) -> None:
     runtime = make_live_runtime(tmp_path, RejectingLiveOrderClient())
     runtime.repository.upsert_strategy_instance(live_strategy())
+    mark_live_strategy_ready(runtime)
 
     runtime.ingest_quote_item(
         {"code": "NASDAQ:AAPL", "bid": 100, "ask": 101, "last_price": 100.5, "delay_seconds": 0}
@@ -501,6 +532,19 @@ def live_strategy() -> StrategyInstance:
             "take_profit_distance_price": 5,
             "cooldown_seconds": 5,
         },
+    )
+
+
+def mark_live_strategy_ready(runtime: RuntimeService) -> None:
+    runtime.ingest_live_account_state(
+        LiveAccountState(
+            account_alias="stock_margin",
+            total_net_liquidation_value=100_000,
+            observed_at=utc_now(),
+            strategy_instance_id="st-live",
+            previews_ready=True,
+            reconciliation_ready=True,
+        )
     )
 
 

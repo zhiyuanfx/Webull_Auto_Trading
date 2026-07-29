@@ -28,7 +28,8 @@
   rejection rules.
 - `src/webull_auto_trading/insightsentry_stream.py`: production InsightSentry quote/series
   WebSocket service, complete replacement subscriptions, and safe stream status.
-- `src/webull_auto_trading/strategy/recycle_buy.py`: simple Test-mode paper recycle-buy EA.
+- `src/webull_auto_trading/strategy/recycle_buy.py`: simple Test/Live recycle-buy EA using
+  the shared gated market-order path.
 - `src/webull_auto_trading/strategy/`: tracks only the base interface, package init, and
   disclosed demo strategies; real strategy modules are local/ignored.
 - `src/webull_auto_trading/order_manager.py`: virtual pending orders and paper fills.
@@ -60,6 +61,9 @@ and user request.
 - There is no external-alert intake, local simulator, or alternate trading environment.
 - Live allocations use explicit `OPENING`, `OPEN`, `CLOSING`, `CLOSED`, and error states.
   Risk levels are calculated from confirmed Webull fill prices, not virtual trigger prices.
+- Tracked strategies must treat `PENDING`, `OPENING`, `FILLED`, `OPEN`, and `CLOSING` as
+  active allocation state, scope local stop handling by strategy instance, and require fresh
+  preview/reconciliation readiness before creating live entries.
 - Webull aggregate positions reconcile against signed tagged allocations plus a captured
   external baseline. Unexplained mismatches pause all strategies sharing the account alias
   and symbol; never auto-adopt or auto-flatten a mismatch.

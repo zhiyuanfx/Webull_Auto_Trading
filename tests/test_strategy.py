@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from webull_auto_trading.domain import (
     ExecutionMode,
     IntentType,
+    LiveAccountState,
     OrderRole,
     OrderSide,
     OrderStatus,
@@ -105,6 +106,147 @@ def test_recycle_buy_opens_closes_and_waits_for_cooldown() -> None:
 
     assert messages == [IntentType.PLACE_MARKET_ORDER.value, IntentType.PAPER_FILL.value]
     assert len(book.orders) == 2
+
+
+def test_recycle_buy_live_entry_requires_fresh_ready_account_state() -> None:
+    strategy = RecycleBuyStrategy()
+    book = PaperOrderBook()
+    instance = StrategyInstance(
+        id="st-live-mgc",
+        strategy_name="recycle_buy",
+        symbol="COMEX_MINI:MGCQ2026",
+        account_alias="futures",
+        asset_class="futures",
+        live_execution_enabled=True,
+        params={
+            "lots": 1,
+            "stop_loss_distance_price": 5,
+            "take_profit_distance_price": 5,
+            "cooldown_seconds": 5,
+        },
+    )
+    current_quote = quote("COMEX_MINI:MGCQ2026", 2499.5, 2500)
+
+    assert strategy.on_quote(instance, current_quote, book) == []
+    assert book.orders == []
+
+    strategy.on_account_snapshot(
+        instance,
+        LiveAccountState(
+            account_alias="futures",
+            total_net_liquidation_value=100_000,
+            observed_at=utc_now(),
+            strategy_instance_id=instance.id,
+            previews_ready=True,
+            reconciliation_ready=True,
+        ),
+        book,
+    )
+    messages = strategy.on_quote(instance, current_quote, book)
+
+    assert messages == [IntentType.PLACE_MARKET_ORDER.value, IntentType.PAPER_FILL.value]
+    assert book.orders[0].metadata["stop_loss_distance_price"] == 5
+    assert book.orders[0].metadata["take_profit_distance_price"] == 5
+
+
+def test_recycle_buy_does_not_duplicate_inflight_live_allocations() -> None:
+    for status in (OrderStatus.OPENING, OrderStatus.CLOSING):
+        strategy = RecycleBuyStrategy()
+        book = PaperOrderBook()
+        instance = StrategyInstance(
+            id=f"st-{status.value.lower()}",
+            strategy_name="recycle_buy",
+            symbol="COMEX_MINI:MGCQ2026",
+        )
+        existing = book.place_market_order(
+            strategy_instance_id=instance.id,
+            cycle_id="cyc-existing",
+            symbol=instance.symbol,
+            side=OrderSide.BUY,
+            role=OrderRole.MAIN,
+            quantity=1,
+            fill_price=2500,
+            stop_loss=2495,
+            take_profit=2505,
+        )
+        existing.status = status
+
+        messages = strategy.on_quote(
+            instance,
+            quote("COMEX_MINI:MGCQ2026", 2499.5, 2500),
+            book,
+        )
+
+        assert messages == []
+        assert len(book.orders) == 1
+        assert strategy.state_for(instance).active_cycle_id == "cyc-existing"
+
+
+def test_recycle_buy_manages_only_its_own_same_symbol_order() -> None:
+    strategy = RecycleBuyStrategy()
+    book = PaperOrderBook()
+    target = StrategyInstance(
+        id="st-target",
+        strategy_name="recycle_buy",
+        symbol="COMEX_MINI:MGCQ2026",
+        params={"cooldown_seconds": 5},
+    )
+    target_order = book.place_market_order(
+        strategy_instance_id=target.id,
+        cycle_id="cyc-target",
+        symbol=target.symbol,
+        side=OrderSide.BUY,
+        role=OrderRole.MAIN,
+        quantity=1,
+        fill_price=2500,
+        stop_loss=2495,
+        take_profit=2505,
+    )
+    other_order = book.place_market_order(
+        strategy_instance_id="st-other",
+        cycle_id="cyc-other",
+        symbol=target.symbol,
+        side=OrderSide.BUY,
+        role=OrderRole.MAIN,
+        quantity=1,
+        fill_price=2500,
+        stop_loss=2495,
+        take_profit=2505,
+    )
+
+    messages = strategy.on_quote(
+        target,
+        quote("COMEX_MINI:MGCQ2026", 2494.5, 2495),
+        book,
+    )
+
+    assert messages == [IntentType.CLOSE_CYCLE.value]
+    assert target_order.status == OrderStatus.CLOSED
+    assert other_order.status == OrderStatus.FILLED
+
+
+def test_recycle_buy_persists_control_state_without_live_readiness() -> None:
+    instance = StrategyInstance(
+        id="st-state",
+        strategy_name="recycle_buy",
+        symbol="COMEX_MINI:MGCQ2026",
+    )
+    strategy = RecycleBuyStrategy()
+    state = strategy.state_for(instance)
+    state.active_cycle_id = "cyc-state"
+    state.next_trade_time = utc_now() + timedelta(seconds=5)
+    state.previews_ready = True
+    state.reconciliation_ready = True
+
+    exported = strategy.export_state(instance)
+    restored = RecycleBuyStrategy()
+    restored.import_state(instance, exported)
+    restored_state = restored.state_for(instance)
+
+    assert restored_state.active_cycle_id == "cyc-state"
+    assert restored_state.next_trade_time == state.next_trade_time
+    assert restored_state.previews_ready is False
+    assert restored_state.reconciliation_ready is False
 
 
 def test_order_book_isolates_two_strategy_instances_on_same_quote() -> None:
