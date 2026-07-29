@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -11,7 +12,9 @@ from webull_auto_trading.domain import (
     LiveOrderIntent,
     OrderRole,
     OrderSide,
+    OrderStatus,
     RuntimeMode,
+    StrategyInstance,
 )
 from webull_auto_trading.execution import AccountSnapshot, LiveOrdersSnapshot
 from webull_auto_trading.order_manager import PaperOrderBook
@@ -109,18 +112,30 @@ def test_orders_view_returns_test_mode_paper_data(tmp_path, monkeypatch) -> None
     )
     runtime = RuntimeService(settings)
     runtime.initialize(seed_config=False)
-    order = PaperOrderBook().place_market_order(
+    order_book = PaperOrderBook()
+    buy_order = order_book.place_virtual_stop(
         strategy_instance_id="st-paper",
         cycle_id="cyc-paper",
         symbol="NASDAQ:AAPL",
         side=OrderSide.BUY,
         role=OrderRole.MAIN,
-        quantity=1,
-        fill_price=100,
+        quantity=2,
+        stop_price=100,
         stop_loss=95,
         take_profit=105,
     )
-    runtime.repository.sync_paper_state([order], [], market_prices={})
+    sell_order = order_book.place_virtual_stop(
+        strategy_instance_id="st-paper",
+        cycle_id="cyc-paper",
+        symbol="NASDAQ:AAPL",
+        side=OrderSide.SELL,
+        role=OrderRole.MAIN,
+        quantity=3,
+        stop_price=90,
+        stop_loss=95,
+        take_profit=85,
+    )
+    runtime.repository.sync_paper_state(order_book.orders, [], market_prices={})
     monkeypatch.setattr(api, "get_runtime", lambda: runtime)
     monkeypatch.setattr(api, "get_settings", lambda: settings)
     monkeypatch.setattr(api, "get_stream_service", lambda: FakeStreamService({}))
@@ -131,7 +146,29 @@ def test_orders_view_returns_test_mode_paper_data(tmp_path, monkeypatch) -> None
     assert response.status_code == 200
     payload = response.json()
     assert payload["mode"] == "test"
-    assert [item["id"] for item in payload["paper_orders"]] == [order.id]
+    paper_orders = {item["side"]: item for item in payload["paper_orders"]}
+    assert set(paper_orders) == {"BUY", "SELL"}
+    assert {
+        key: paper_orders["BUY"][key]
+        for key in ("quantity", "stop_price", "fill_price", "stop_loss", "take_profit")
+    } == {
+        "quantity": 2,
+        "stop_price": 100,
+        "fill_price": None,
+        "stop_loss": 95,
+        "take_profit": 105,
+    }
+    assert {
+        key: paper_orders["SELL"][key]
+        for key in ("quantity", "stop_price", "fill_price", "stop_loss", "take_profit")
+    } == {
+        "quantity": 3,
+        "stop_price": 90,
+        "fill_price": None,
+        "stop_loss": 95,
+        "take_profit": 85,
+    }
+    assert {item["id"] for item in payload["paper_orders"]} == {buy_order.id, sell_order.id}
     assert [item["runtime_mode"] for item in payload["paper_cycles"]] == ["test"]
     assert "live_intents" not in payload
 
@@ -150,17 +187,20 @@ def test_orders_view_returns_live_data_without_account_ids(tmp_path, monkeypatch
     runtime = RuntimeService(settings)
     runtime.initialize(seed_config=False)
     runtime.repository.set_runtime_mode(RuntimeMode.LIVE)
-    live_order = PaperOrderBook().place_market_order(
+    live_order = PaperOrderBook().place_virtual_stop(
         strategy_instance_id="st-live",
         cycle_id="cyc-live",
         symbol="NASDAQ:AAPL",
         side=OrderSide.BUY,
         role=OrderRole.MAIN,
-        quantity=1,
-        fill_price=100,
+        quantity=4,
+        stop_price=100,
         stop_loss=95,
-        take_profit=105,
+        take_profit=110,
     )
+    live_order.status = OrderStatus.OPEN
+    live_order.fill_price = 101
+    live_order.stop_loss = 98
     runtime.repository.sync_live_virtual_state([live_order])
     runtime.repository.upsert_live_order_intent(
         LiveOrderIntent(
@@ -195,9 +235,92 @@ def test_orders_view_returns_live_data_without_account_ids(tmp_path, monkeypatch
     assert payload["broker_open_orders"] == [{"client_order_id": "client-live"}]
     assert payload["broker_order_history"] == [{"client_order_id": "client-old"}]
     assert payload["live_intents"][0]["client_order_id"] == "client-live"
+    assert {
+        key: payload["live_virtual_orders"][0][key]
+        for key in ("quantity", "stop_price", "fill_price", "stop_loss", "take_profit")
+    } == {
+        "quantity": 4,
+        "stop_price": 100,
+        "fill_price": 101,
+        "stop_loss": 98,
+        "take_profit": 110,
+    }
+    assert payload["live_virtual_orders"][0]["status"] == "OPEN"
     assert [item["runtime_mode"] for item in payload["live_cycles"]] == ["live"]
     assert "acct-secret" not in response.text
     assert "paper_orders" not in payload
+
+
+def test_pause_api_returns_cancellation_count_and_logs_activity(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        runtime_db_path=tmp_path / "runtime.sqlite3",
+        strategies_test_config_path=tmp_path / "strategies.test.yml",
+        strategies_live_config_path=tmp_path / "strategies.live.yml",
+        _env_file=None,
+    )
+    runtime = RuntimeService(settings)
+    runtime.initialize(seed_config=False)
+    runtime.repository.upsert_strategy_instance(
+        StrategyInstance(
+            id="st-pause",
+            strategy_name="recycle_buy",
+            symbol="NASDAQ:AAPL",
+        )
+    )
+    order = runtime.order_book.place_virtual_stop(
+        strategy_instance_id="st-pause",
+        cycle_id="cyc-pause",
+        symbol="NASDAQ:AAPL",
+        side=OrderSide.BUY,
+        role=OrderRole.MAIN,
+        quantity=1,
+        stop_price=110,
+        stop_loss=105,
+        take_profit=120,
+    )
+    runtime.repository.sync_paper_state(
+        runtime.order_book.orders,
+        runtime.order_book.fills,
+        market_prices={},
+    )
+    stream_service = FakeStreamService({})
+    live_coordinator = FakeStreamService({})
+    monkeypatch.setattr(api, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(api, "get_stream_service", lambda: stream_service)
+    monkeypatch.setattr(api, "get_live_coordinator", lambda: live_coordinator)
+
+    with TestClient(api.create_app()) as client:
+        response = client.put(
+            "/api/strategies/st-pause",
+            json={"enabled": False},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "st-pause"
+    assert payload["enabled"] is False
+    assert payload["cancelled_pending"] == 1
+    assert runtime.repository.list_paper_orders()[0].status == OrderStatus.CANCELLED
+    event = next(
+        row
+        for row in runtime.repository.list_table("activity")
+        if row["event_type"] == "VirtualEntriesCancelledOnPause"
+    )
+    event_payload = json.loads(event["payload_json"])
+    assert event["strategy_instance_id"] == "st-pause"
+    assert event["symbol"] == "NASDAQ:AAPL"
+    assert event_payload == {
+        "strategy_id": "st-pause",
+        "symbol": "NASDAQ:AAPL",
+        "mode": "test",
+        "cancelled_pending": 1,
+    }
+    assert order.id in {item.id for item in runtime.repository.list_paper_orders()}
+    assert stream_service.started is True
+    assert live_coordinator.started is True
 
 
 class FakeReadService:

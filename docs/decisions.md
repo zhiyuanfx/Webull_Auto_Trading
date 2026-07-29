@@ -36,11 +36,18 @@ credentials, idle symbols, reconnecting, and stream errors through a safe local 
 endpoint. Global pause does not stop market data visibility.
 
 Operator pause state is persistent. Config `enabled` seeds a new strategy ID, while the
-SQLite strategy setting remains authoritative for an existing ID. Global and per-strategy
-flatten controls are paper-only: they pause execution, cancel virtual pending orders, and
-close paper positions only when an in-memory current quote provides the documented paper
-close side. Live mode rejects broad flatten; live exits are produced by the same gated
-strategy close path that submits Webull market orders.
+SQLite strategy setting remains authoritative for an existing ID. Pausing an individual
+strategy serializes against quote, series, timer, and account-snapshot strategy callbacks,
+cancels only that instance's local `PENDING` virtual entries, and immediately persists their
+`CANCELLED` history in the active mode's store. Resume never restores cancelled entries;
+later eligible evaluation may create a fresh setup from current config. Pause does not call
+Webull Cancel Order or close `OPENING`, `FILLED`, `OPEN`, or `CLOSING` allocations, and a
+disabled strategy no longer runs its normal risk-management callbacks.
+
+Global and per-strategy flatten controls are paper-only: they pause execution, cancel
+virtual pending orders, and close paper positions only when an in-memory current quote
+provides the documented paper close side. Live mode rejects broad flatten; live exits are
+produced by the same gated strategy close path that submits Webull market orders.
 
 The tracked public strategy package includes `recycle_buy`, a deliberately small paper-only
 helper EA that opens an immediate BUY on each valid quote, attaches fixed stop-loss/take-

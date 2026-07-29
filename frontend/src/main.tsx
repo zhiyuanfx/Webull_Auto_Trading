@@ -47,6 +47,10 @@ type StrategyInstance = {
   params: Record<string, unknown>;
 };
 
+type StrategyUpdateResult = StrategyInstance & {
+  cancelled_pending: number;
+};
+
 type AccountPayload = {
   mode?: RuntimeMode;
   message?: string;
@@ -164,7 +168,7 @@ const dictionary = {
       cycles: "Cycles",
       event_type: "Event type",
       error_message: "Error",
-      fill_price: "Fill price",
+      fill_price: "Entry fill",
       fills: "Fills",
       last_price: "Last price",
       level: "Level",
@@ -185,7 +189,8 @@ const dictionary = {
       starting_balance: "Starting balance",
       status: "Status",
       stop_loss: "Stop loss",
-      stop_price: "Stop price",
+      stop_price: "Entry trigger",
+      take_profit: "Take profit",
       strategy_name: "Strategy",
       symbol: "Symbol",
       account_alias: "Account alias",
@@ -205,6 +210,7 @@ const dictionary = {
     configured: "Configured",
     controls: "Controls",
     cancelledPending: "Cancelled pending",
+    cancelledVirtualEntries: "Pending virtual entries cancelled",
     closedPositions: "Closed positions",
     dashboard: "Dashboard",
     dark: "Dark",
@@ -234,8 +240,11 @@ const dictionary = {
     off: "Off",
     orders: "Orders",
     pause: "Pause",
+    pauseSafety:
+      "Pausing cancels only this strategy's pending virtual entries. It does not close broker exposure, and strategy risk management stops while paused.",
     pausing: "Pausing...",
     paused: "Paused",
+    brokerExposureNotClosed: "Broker exposure was not closed.",
     paperAccount: "Paper account",
     recentIssues: "Recent Issues",
     refresh: "Refresh",
@@ -297,7 +306,7 @@ const dictionary = {
       cycles: "周期",
       event_type: "事件类型",
       error_message: "错误",
-      fill_price: "成交价",
+      fill_price: "入场成交价",
       fills: "成交",
       last_price: "最新价",
       level: "级别",
@@ -318,7 +327,8 @@ const dictionary = {
       starting_balance: "初始余额",
       status: "状态",
       stop_loss: "止损",
-      stop_price: "止损触发价",
+      stop_price: "入场触发价",
+      take_profit: "止盈",
       strategy_name: "策略",
       symbol: "标的",
       account_alias: "账户别名",
@@ -338,6 +348,7 @@ const dictionary = {
     configured: "已配置",
     controls: "控制",
     cancelledPending: "已取消挂单",
+    cancelledVirtualEntries: "已取消待触发虚拟入场单",
     closedPositions: "已平仓持仓",
     dashboard: "仪表盘",
     dark: "深色",
@@ -367,8 +378,11 @@ const dictionary = {
     off: "关闭",
     orders: "订单",
     pause: "暂停",
+    pauseSafety:
+      "暂停只会取消此策略的待触发虚拟入场单，不会关闭券商持仓；暂停期间策略风险管理也会停止。",
     pausing: "暂停中...",
     paused: "暂停",
+    brokerExposureNotClosed: "券商持仓未被关闭。",
     paperAccount: "纸面账户",
     recentIssues: "近期问题",
     refresh: "刷新",
@@ -723,6 +737,10 @@ function Strategies({
       if (!response.ok) {
         throw new Error(await responseError(response, t.requestFailed));
       }
+      const result = (await response.json()) as StrategyUpdateResult;
+      if (!nextEnabled) {
+        setStatusMessage(pauseSummaryMessage(result.cancelled_pending, t));
+      }
       setRowStatus((current) => {
         const next = { ...current };
         delete next[strategy.id];
@@ -847,6 +865,7 @@ function Strategies({
         {liveMode && <span className="muted">{t.liveFlattenDisabled}</span>}
         {statusMessage && <span className="statusMessage">{statusMessage}</span>}
       </section>
+      <p className="muted">{t.pauseSafety}</p>
       <Table
         rows={strategies.map((strategy) => ({
           ...strategy,
@@ -858,6 +877,7 @@ function Strategies({
                 className="smallButton"
                 disabled={pendingAction !== null}
                 onClick={() => void toggle(strategy)}
+                title={strategy.enabled ? t.pauseSafety : t.resume}
               >
                 {actionLabel(strategy)}
               </button>
@@ -1122,7 +1142,17 @@ function Orders({
           <h2>{t.liveVirtualOrders}</h2>
           <InnerTable
             rows={ordersView.live_virtual_orders}
-            columns={["symbol", "side", "role", "status", "quantity", "fill_price", "stop_loss"]}
+            columns={[
+              "symbol",
+              "side",
+              "role",
+              "status",
+              "quantity",
+              "stop_price",
+              "fill_price",
+              "stop_loss",
+              "take_profit"
+            ]}
             empty={t.noLiveOrders}
             t={t}
           />
@@ -1143,7 +1173,17 @@ function Orders({
     <div className="stack">
       <Table
         rows={ordersView.paper_orders}
-        columns={["symbol", "side", "role", "status", "stop_price", "fill_price", "stop_loss"]}
+        columns={[
+          "symbol",
+          "side",
+          "role",
+          "status",
+          "quantity",
+          "stop_price",
+          "fill_price",
+          "stop_loss",
+          "take_profit"
+        ]}
         empty={t.noOrders}
         t={t}
       />
@@ -1355,6 +1395,14 @@ function flattenSummaryMessage(summary: FlattenSummary, t: typeof dictionary.en)
     parts.push(`${t.warnings}: ${summary.warnings.join("; ")}`);
   }
   return parts.join(" · ");
+}
+
+function pauseSummaryMessage(cancelledPending: number, t: typeof dictionary.en): string {
+  return [
+    t.paused,
+    `${t.cancelledVirtualEntries}: ${cancelledPending}`,
+    t.brokerExposureNotClosed
+  ].join(" · ");
 }
 
 function accountAliasLabel(account: AccountAlias): string {

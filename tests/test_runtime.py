@@ -1,4 +1,5 @@
 import sys
+import threading
 import types
 
 from webull_auto_trading.config import Settings
@@ -137,6 +138,204 @@ def test_live_mode_rejects_flatten(tmp_path) -> None:
         assert "paper-only" in str(exc)
     else:
         raise AssertionError("live flatten should be rejected")
+
+
+def test_pause_cancels_only_target_pending_paper_orders_and_is_idempotent(
+    tmp_path,
+) -> None:
+    runtime = make_runtime(tmp_path)
+    runtime.repository.seed_strategy_instances(
+        [
+            StrategyInstance(id="st-1", strategy_name="recycle_buy", symbol="NASDAQ:AAPL"),
+            StrategyInstance(id="st-2", strategy_name="recycle_buy", symbol="NASDAQ:AAPL"),
+        ]
+    )
+    runtime.order_book.orders = [
+        virtual_order("target-main", "st-1", OrderStatus.PENDING),
+        virtual_order(
+            "target-add-on",
+            "st-1",
+            OrderStatus.PENDING,
+            role=OrderRole.ADD_ON,
+        ),
+        virtual_order("other-pending", "st-2", OrderStatus.PENDING),
+        virtual_order("target-opening", "st-1", OrderStatus.OPENING),
+        virtual_order("target-filled", "st-1", OrderStatus.FILLED),
+        virtual_order("target-open", "st-1", OrderStatus.OPEN),
+        virtual_order("target-closing", "st-1", OrderStatus.CLOSING),
+    ]
+    runtime.repository.sync_paper_state(
+        runtime.order_book.orders,
+        runtime.order_book.fills,
+        market_prices={},
+    )
+
+    first = runtime.set_strategy_enabled("st-1", False)
+    second = runtime.set_strategy_enabled("st-1", False)
+
+    assert first["cancelled_pending"] == 2
+    assert second["cancelled_pending"] == 0
+    assert first["enabled"] is False
+    persisted = {
+        order.id: order for order in runtime.repository.list_paper_orders()
+    }
+    assert persisted["target-main"].status == OrderStatus.CANCELLED
+    assert persisted["target-add-on"].status == OrderStatus.CANCELLED
+    assert persisted["target-main"].closed_at is not None
+    assert persisted["target-main"].metadata["intent"] == "CancelVirtualOrder"
+    assert persisted["other-pending"].status == OrderStatus.PENDING
+    assert persisted["target-opening"].status == OrderStatus.OPENING
+    assert persisted["target-filled"].status == OrderStatus.FILLED
+    assert persisted["target-open"].status == OrderStatus.OPEN
+    assert persisted["target-closing"].status == OrderStatus.CLOSING
+
+
+def test_live_pause_cancels_only_local_pending_without_webull_or_live_intent(
+    tmp_path,
+) -> None:
+    client = FailOnCallLiveOrderClient()
+    runtime = make_live_runtime(tmp_path, client)
+    runtime.repository.seed_strategy_instances(
+        [
+            live_strategy(),
+            StrategyInstance(
+                id="st-other",
+                strategy_name="recycle_buy",
+                symbol="NASDAQ:AAPL",
+            ),
+        ]
+    )
+    runtime.live_virtual_book.orders = [
+        virtual_order("live-pending", "st-live", OrderStatus.PENDING),
+        virtual_order("other-live-pending", "st-other", OrderStatus.PENDING),
+        virtual_order("live-opening", "st-live", OrderStatus.OPENING),
+        virtual_order("live-open", "st-live", OrderStatus.OPEN),
+        virtual_order("live-closing", "st-live", OrderStatus.CLOSING),
+    ]
+    runtime.repository.sync_live_virtual_state(runtime.live_virtual_book.orders)
+
+    result = runtime.set_strategy_enabled("st-live", False)
+
+    assert result["cancelled_pending"] == 1
+    persisted = {
+        order.id: order for order in runtime.repository.list_live_virtual_orders()
+    }
+    assert persisted["live-pending"].status == OrderStatus.CANCELLED
+    assert persisted["other-live-pending"].status == OrderStatus.PENDING
+    assert persisted["live-opening"].status == OrderStatus.OPENING
+    assert persisted["live-open"].status == OrderStatus.OPEN
+    assert persisted["live-closing"].status == OrderStatus.CLOSING
+    assert runtime.repository.list_live_order_intents() == []
+    assert client.calls == []
+
+
+def test_resume_keeps_cancelled_entries_and_uses_reloaded_parameters(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    runtime.strategies["fresh_oco"] = FreshOcoStrategy()
+    runtime.repository.upsert_strategy_instance(
+        StrategyInstance(
+            id="st-oco",
+            strategy_name="fresh_oco",
+            symbol="NASDAQ:AAPL",
+            params={"offset": 5},
+        )
+    )
+    quote_item = {
+        "code": "NASDAQ:AAPL",
+        "bid": 99,
+        "ask": 101,
+        "last_price": 100,
+        "delay_seconds": 0,
+    }
+    runtime.ingest_quote_item(quote_item)
+
+    pause_result = runtime.set_strategy_enabled("st-oco", False)
+    runtime.repository.replace_strategy_instances(
+        [
+            StrategyInstance(
+                id="st-oco",
+                strategy_name="fresh_oco",
+                symbol="NASDAQ:AAPL",
+                params={"offset": 20},
+            )
+        ]
+    )
+    reloaded = runtime.repository.list_strategy_instances()[0]
+    resume_result = runtime.set_strategy_enabled("st-oco", True)
+    runtime.ingest_quote_item(quote_item)
+
+    assert pause_result["cancelled_pending"] == 2
+    assert reloaded.enabled is False
+    assert reloaded.params == {"offset": 20}
+    assert resume_result["cancelled_pending"] == 0
+    cancelled = [
+        order
+        for order in runtime.order_book.orders
+        if order.status == OrderStatus.CANCELLED
+    ]
+    pending = [
+        order
+        for order in runtime.order_book.orders
+        if order.status == OrderStatus.PENDING
+    ]
+    assert len(cancelled) == 2
+    assert len(pending) == 2
+    assert sorted(order.stop_price for order in pending) == [80, 120]
+
+
+def test_pause_waits_for_running_evaluation_and_blocks_later_callbacks(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    strategy = BlockingPendingStrategy()
+    runtime.strategies["blocking_pending"] = strategy
+    runtime.repository.upsert_strategy_instance(
+        StrategyInstance(
+            id="st-blocking",
+            strategy_name="blocking_pending",
+            symbol="NASDAQ:AAPL",
+        )
+    )
+    quote_item = {
+        "code": "NASDAQ:AAPL",
+        "bid": 99,
+        "ask": 101,
+        "last_price": 100,
+        "delay_seconds": 0,
+    }
+    evaluation_errors: list[BaseException] = []
+    pause_result: dict[str, object] = {}
+    pause_started = threading.Event()
+    pause_finished = threading.Event()
+
+    def evaluate() -> None:
+        try:
+            runtime.ingest_quote_item(quote_item)
+        except BaseException as exc:
+            evaluation_errors.append(exc)
+
+    def pause() -> None:
+        pause_started.set()
+        pause_result.update(runtime.set_strategy_enabled("st-blocking", False))
+        pause_finished.set()
+
+    evaluation_thread = threading.Thread(target=evaluate)
+    pause_thread = threading.Thread(target=pause)
+    evaluation_thread.start()
+    assert strategy.entered.wait(timeout=2)
+    pause_thread.start()
+    assert pause_started.wait(timeout=2)
+    assert not pause_finished.wait(timeout=0.1)
+
+    strategy.release.set()
+    evaluation_thread.join(timeout=2)
+    pause_thread.join(timeout=2)
+
+    assert not evaluation_thread.is_alive()
+    assert not pause_thread.is_alive()
+    assert evaluation_errors == []
+    assert pause_result["cancelled_pending"] == 1
+    assert runtime.order_book.orders[0].status == OrderStatus.CANCELLED
+    runtime.ingest_quote_item(quote_item)
+    assert strategy.calls == 1
 
 
 def test_enabled_symbol_streams_are_deduplicated(tmp_path) -> None:
@@ -317,3 +516,96 @@ class FakeLiveOrderClient:
 class RejectingLiveOrderClient:
     async def place_order(self, account_id: str, order: dict[str, str]) -> dict[str, str]:
         raise WebullError("REJECTED", "order rejected")
+
+
+class FailOnCallLiveOrderClient:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def place_order(self, account_id: str, order: dict[str, str]) -> dict[str, str]:
+        self.calls.append("place_order")
+        raise AssertionError("pause must not submit a Webull order")
+
+
+class FreshOcoStrategy(Strategy):
+    def on_quote(
+        self,
+        instance: StrategyInstance,
+        quote,
+        order_book: PaperOrderBook,
+    ) -> list[str]:
+        if (
+            order_book.pending_for_instance(instance.id)
+            or order_book.open_for_instance(instance.id)
+            or quote.mid_price is None
+        ):
+            return []
+        offset = float(instance.params["offset"])
+        cycle_id = new_id("cyc")
+        for side, stop_price in (
+            (OrderSide.BUY, quote.mid_price + offset),
+            (OrderSide.SELL, quote.mid_price - offset),
+        ):
+            order_book.place_virtual_stop(
+                strategy_instance_id=instance.id,
+                cycle_id=cycle_id,
+                symbol=instance.symbol,
+                side=side,
+                role=OrderRole.MAIN,
+                quantity=1,
+                stop_price=stop_price,
+                stop_loss=stop_price,
+                take_profit=stop_price,
+            )
+        return ["PlaceVirtualStop"]
+
+
+class BlockingPendingStrategy(Strategy):
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def on_quote(
+        self,
+        instance: StrategyInstance,
+        quote,
+        order_book: PaperOrderBook,
+    ) -> list[str]:
+        self.calls += 1
+        self.entered.set()
+        if not self.release.wait(timeout=2):
+            raise TimeoutError("test did not release strategy evaluation")
+        order_book.place_virtual_stop(
+            strategy_instance_id=instance.id,
+            cycle_id=new_id("cyc"),
+            symbol=instance.symbol,
+            side=OrderSide.BUY,
+            role=OrderRole.MAIN,
+            quantity=1,
+            stop_price=(quote.ask or 0) + 10,
+            stop_loss=1,
+            take_profit=2,
+        )
+        return []
+
+
+def virtual_order(
+    order_id: str,
+    strategy_id: str,
+    status: OrderStatus,
+    *,
+    role: OrderRole = OrderRole.MAIN,
+) -> PaperOrder:
+    return PaperOrder(
+        id=order_id,
+        strategy_instance_id=strategy_id,
+        cycle_id=f"cycle-{order_id}",
+        symbol="NASDAQ:AAPL",
+        side=OrderSide.BUY,
+        role=role,
+        quantity=1,
+        status=status,
+        stop_price=110,
+        fill_price=100 if status != OrderStatus.PENDING else None,
+    )

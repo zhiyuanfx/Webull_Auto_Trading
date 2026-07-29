@@ -4,6 +4,7 @@ import asyncio
 import importlib
 from dataclasses import asdict
 from datetime import datetime
+from threading import RLock
 from typing import Any
 
 from webull_auto_trading.config import Settings
@@ -60,6 +61,7 @@ class RuntimeService:
         self.risk = RiskController()
         self.strategies: dict[str, Strategy] = {"recycle_buy": RecycleBuyStrategy()}
         self._restored_strategy_instances: set[str] = set()
+        self._strategy_operation_lock = RLock()
 
     def initialize(self, *, seed_config: bool = True) -> None:
         self.repository.init_db()
@@ -124,14 +126,55 @@ class RuntimeService:
         return {"global_pause": paused}
 
     def set_strategy_enabled(self, strategy_id: str, enabled: bool) -> dict[str, Any]:
-        instance = self.repository.update_strategy_instance(strategy_id, {"enabled": enabled})
-        self.repository.log_activity(
-            "UnlockInstance" if enabled else "LockInstance",
-            f"Strategy {strategy_id} {'resumed' if enabled else 'paused'}",
-            strategy_instance_id=instance.id,
-            symbol=instance.symbol,
-        )
-        return asdict(instance)
+        with self._strategy_operation_lock:
+            runtime_mode = self.active_mode()
+            instance = self.repository.update_strategy_instance(
+                strategy_id,
+                {"enabled": enabled},
+            )
+            cancelled_pending = 0
+            if not enabled:
+                book = (
+                    self.live_virtual_book
+                    if runtime_mode == RuntimeMode.LIVE
+                    else self.order_book
+                )
+                cancelled_pending = book.cancel_pending(strategy_id)
+                if runtime_mode == RuntimeMode.LIVE:
+                    self.repository.sync_live_virtual_state(book.orders)
+                else:
+                    self.repository.sync_paper_state(
+                        book.orders,
+                        book.fills,
+                        market_prices=self.current_market_prices(),
+                    )
+            self.repository.log_activity(
+                "UnlockInstance" if enabled else "LockInstance",
+                f"Strategy {strategy_id} {'resumed' if enabled else 'paused'}",
+                strategy_instance_id=instance.id,
+                symbol=instance.symbol,
+            )
+            if not enabled:
+                cancellation_payload = {
+                    "strategy_id": instance.id,
+                    "symbol": instance.symbol,
+                    "mode": runtime_mode.value,
+                    "cancelled_pending": cancelled_pending,
+                }
+                self.repository.log_activity(
+                    "VirtualEntriesCancelledOnPause",
+                    (
+                        f"Cancelled {cancelled_pending} pending virtual "
+                        f"{'entry' if cancelled_pending == 1 else 'entries'} on pause"
+                    ),
+                    strategy_instance_id=instance.id,
+                    symbol=instance.symbol,
+                    payload=cancellation_payload,
+                )
+            return {
+                **asdict(instance),
+                "cancelled_pending": cancelled_pending,
+            }
 
     def set_strategy_live_execution(
         self,
@@ -281,6 +324,10 @@ class RuntimeService:
         return []
 
     def ingest_series_payload(self, payload: dict[str, Any]) -> list[str]:
+        with self._strategy_operation_lock:
+            return self._ingest_series_payload(payload)
+
+    def _ingest_series_payload(self, payload: dict[str, Any]) -> list[str]:
         bars = parse_series_bars(payload)
         if not bars:
             return []
@@ -327,6 +374,10 @@ class RuntimeService:
             )
 
     def evaluate_quote(self, quote: QuoteState) -> list[str]:
+        with self._strategy_operation_lock:
+            return self._evaluate_quote(quote)
+
+    def _evaluate_quote(self, quote: QuoteState) -> list[str]:
         validation = validate_quote(
             quote,
             max_staleness_seconds=self.settings.quote_max_staleness_seconds,
@@ -341,7 +392,7 @@ class RuntimeService:
             )
             return [validation.reason]
         if self.active_mode() == RuntimeMode.LIVE:
-            return self.evaluate_live_quote(quote)
+            return self._evaluate_live_quote(quote)
         messages: list[str] = []
         for instance in self.repository.list_strategy_instances():
             if not instance.enabled or instance.symbol != quote.symbol:
@@ -379,6 +430,10 @@ class RuntimeService:
         return messages
 
     def evaluate_live_quote(self, quote: QuoteState) -> list[str]:
+        with self._strategy_operation_lock:
+            return self._evaluate_live_quote(quote)
+
+    def _evaluate_live_quote(self, quote: QuoteState) -> list[str]:
         self._hydrate_live_intent_outcomes()
         messages: list[str] = []
         for instance in self.repository.list_strategy_instances():
@@ -479,6 +534,10 @@ class RuntimeService:
             self.repository.sync_live_virtual_state(self.live_virtual_book.orders)
 
     def ingest_live_account_state(self, account: LiveAccountState) -> list[str]:
+        with self._strategy_operation_lock:
+            return self._ingest_live_account_state(account)
+
+    def _ingest_live_account_state(self, account: LiveAccountState) -> list[str]:
         messages: list[str] = []
         for instance in self.repository.list_strategy_instances():
             if (
@@ -505,6 +564,10 @@ class RuntimeService:
         return messages
 
     def evaluate_timers(self, *, now: datetime) -> list[str]:
+        with self._strategy_operation_lock:
+            return self._evaluate_timers(now=now)
+
+    def _evaluate_timers(self, *, now: datetime) -> list[str]:
         messages: list[str] = []
         live = self.active_mode() == RuntimeMode.LIVE
         book = self.live_virtual_book if live else self.order_book

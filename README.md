@@ -94,6 +94,13 @@ and tuned parameters out of git. The tracked public strategy package includes on
 interface, package init, and the disclosed `recycle_buy` demo; private strategy modules can
 live beside it as ignored local files.
 
+Pausing one strategy from the operator console cancels only that instance's local pending
+virtual entries and preserves them as `CANCELLED` history in the test or live virtual-order
+store. It does not cancel a Webull order or close broker exposure, and the disabled strategy
+stops running its normal quote/timer risk management. Resuming does not restore cancelled
+entries; a later eligible evaluation may create a fresh setup from the current YAML
+parameters.
+
 Strategies may request quote and complete replacement series subscriptions, consume live
 account snapshots, export control state, and run timer-based safety checks. Quotes and OHLC
 bars stay in memory. Durable strategy state must contain only control data such as session

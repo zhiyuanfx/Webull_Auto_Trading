@@ -52,6 +52,9 @@ and user request.
 - Runtime supports global `test` and `live` modes. Live order transmission is allowed only
   through the gated market-order path after global mode, master, per-strategy, quote,
   in-flight, account alias, and reconciliation gates pass.
+- Pausing one strategy cancels and persists only that instance's local `PENDING` virtual
+  entries. It never calls Webull Cancel Order, alters another strategy, or closes
+  `OPENING`, `FILLED`, `OPEN`, or `CLOSING` allocations.
 - Strategy instances do not expose public per-strategy execution modes.
 - Market quote/series display is process-memory only; do not persist new quote or bar data.
 - There is no external-alert intake, local simulator, or alternate trading environment.
