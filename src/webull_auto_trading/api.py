@@ -13,7 +13,11 @@ from webull_auto_trading.domain import RuntimeMode
 from webull_auto_trading.execution import AccountSnapshot, LiveOrdersSnapshot, WebullReadService
 from webull_auto_trading.insightsentry_stream import InsightSentryQuoteStreamService
 from webull_auto_trading.live_reconciliation import LiveRuntimeCoordinator
-from webull_auto_trading.runtime import RuntimeService
+from webull_auto_trading.runtime import (
+    RuntimeService,
+    StrategyResetBlocked,
+    StrategyResetBrokerError,
+)
 
 
 class GlobalPausePayload(BaseModel):
@@ -213,6 +217,17 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="strategy not found") from exc
         except PermissionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/strategies/{strategy_id}/reset")
+    async def reset_strategy(strategy_id: str) -> dict[str, Any]:
+        try:
+            return await get_runtime().reset_strategy(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="strategy not found") from exc
+        except StrategyResetBlocked as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except StrategyResetBrokerError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/market/streams/strategies")
     def list_stream_strategies() -> list[dict[str, Any]]:

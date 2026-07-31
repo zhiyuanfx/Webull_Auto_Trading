@@ -122,6 +122,7 @@ class RecycleBuyStrategy(Strategy):
                     if order.strategy_instance_id == instance.id
                     and order.status == OrderStatus.CLOSED
                     and order.closed_at is not None
+                    and not order.metadata.get("state_reset_terminal")
                 ),
                 key=lambda order: order.closed_at,
                 default=None,
@@ -185,6 +186,9 @@ class RecycleBuyStrategy(Strategy):
             ),
             next_trade_time=parsed_next_trade_time,
         )
+
+    def reset_state(self, instance: StrategyInstance) -> None:
+        self.states[instance.id] = RecycleBuyState()
 
     @staticmethod
     def _live_entry_ready(state: RecycleBuyState, now: datetime) -> bool:

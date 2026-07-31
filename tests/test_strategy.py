@@ -249,6 +249,31 @@ def test_recycle_buy_persists_control_state_without_live_readiness() -> None:
     assert restored_state.reconciliation_ready is False
 
 
+def test_recycle_buy_reset_state_clears_only_selected_instance() -> None:
+    first = StrategyInstance(
+        id="st-first",
+        strategy_name="recycle_buy",
+        symbol="NASDAQ:AAPL",
+    )
+    second = StrategyInstance(
+        id="st-second",
+        strategy_name="recycle_buy",
+        symbol="NASDAQ:AAPL",
+    )
+    strategy = RecycleBuyStrategy()
+    strategy.state_for(first).active_cycle_id = "cycle-first"
+    strategy.state_for(first).next_trade_time = utc_now() + timedelta(minutes=1)
+    strategy.state_for(first).previews_ready = True
+    strategy.state_for(second).active_cycle_id = "cycle-second"
+
+    strategy.reset_state(first)
+
+    assert strategy.state_for(first).active_cycle_id is None
+    assert strategy.state_for(first).next_trade_time is None
+    assert strategy.state_for(first).previews_ready is False
+    assert strategy.state_for(second).active_cycle_id == "cycle-second"
+
+
 def test_order_book_isolates_two_strategy_instances_on_same_quote() -> None:
     book = PaperOrderBook()
     book.place_virtual_stop(

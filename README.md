@@ -109,10 +109,28 @@ stops running its normal quote/timer risk management. Resuming does not restore 
 entries; a later eligible evaluation may create a fresh setup from the current YAML
 parameters.
 
+Each paused strategy row also has a per-instance reset control. In Test mode, `Reset` closes
+only that instance's active paper allocation at the current executable quote side, cancels
+its pending virtual entries, completes its cycles, and resets its durable and in-memory
+strategy state. In Live mode, `Reconcile & Reset` is read-only at Webull: the operator must
+manually close the allocation in the Webull app and wait for the fill. The runtime then makes
+fresh position, open-order, order-history, and Order Detail reads and proceeds only when the
+manual opposite-side fill is unambiguous and the existing external-baseline reconciliation
+equation balances after excluding the selected strategy. It never places, cancels, replaces,
+or closes a Webull order, never changes global pause, and leaves the strategy paused.
+
+The additive API is `POST /api/strategies/{strategy_id}/reset`. It returns reset counts,
+broker/expected positions when applicable, and the paused state. Unknown strategies return
+404, unsafe local or broker state returns 409, and failed fresh Webull reads return 502.
+Reset updates historical rows in place and appends audit events; it does not delete history,
+create a SQLite backup, or require a runtime restart.
+
 Strategies may request quote and complete replacement series subscriptions, consume live
 account snapshots, export control state, and run timer-based safety checks. Quotes and OHLC
 bars stay in memory. Durable strategy state must contain only control data such as session
 identity, cycle counts, cooldowns, account-equity baselines, and active allocation counters.
+Stateful strategies must implement the per-instance `reset_state(instance)` contract;
+otherwise reset is rejected rather than silently retaining strategy control state.
 
 Live futures brackets are virtual because Webull does not support futures OCO/OTOCO
 combinations. A virtual trigger submits a gated market order, then remains `OPENING` until

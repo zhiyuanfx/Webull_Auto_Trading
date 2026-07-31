@@ -147,6 +147,18 @@ type FlattenSummary = {
   warnings: string[];
 };
 
+type StrategyResetSummary = {
+  strategy_id: string;
+  mode: RuntimeMode;
+  enabled: boolean;
+  completed: boolean;
+  cancelled_pending: number;
+  reconciled_allocations: number;
+  completed_cycles: number;
+  strategy_state_cleared: boolean;
+  warnings: string[];
+};
+
 const dictionary = {
   en: {
     account: "Account",
@@ -247,10 +259,19 @@ const dictionary = {
     brokerExposureNotClosed: "Broker exposure was not closed.",
     paperAccount: "Paper account",
     recentIssues: "Recent Issues",
+    reconcileAndReset: "Reconcile & Reset",
     refresh: "Refresh",
     refreshWebull: "Refresh Webull Reads",
     selectAccount: "Account",
     reset: "Reset",
+    resetChecking: "Checking broker and reconciling...",
+    resetConfirm:
+      "This clears local EA state only. It does not close or cancel anything at Webull. In Live mode, manually close the position and wait for it to fill first.",
+    resetComplete: "Reset complete",
+    resetReconciledAllocation: "reconciled allocation",
+    resetReconciledAllocations: "reconciled allocations",
+    resetReadyToResume: "EA remains paused and is ready to resume",
+    resetting: "Resetting...",
     resume: "Resume",
     resuming: "Resuming...",
     cleanup: "Cleanup",
@@ -385,10 +406,19 @@ const dictionary = {
     brokerExposureNotClosed: "券商持仓未被关闭。",
     paperAccount: "纸面账户",
     recentIssues: "近期问题",
+    reconcileAndReset: "核对并重置",
     refresh: "刷新",
     refreshWebull: "刷新 Webull 读取",
     selectAccount: "账户",
     reset: "重置",
+    resetChecking: "正在检查券商状态并核对...",
+    resetConfirm:
+      "此操作只会清除本地 EA 状态，不会在 Webull 平仓或取消任何订单。实盘模式下，请先手动平仓并等待成交。",
+    resetComplete: "重置完成",
+    resetReconciledAllocation: "笔持仓已核对",
+    resetReconciledAllocations: "笔持仓已核对",
+    resetReadyToResume: "EA 保持暂停，可随时恢复",
+    resetting: "重置中...",
     resume: "恢复",
     resuming: "恢复中...",
     cleanup: "清理",
@@ -820,6 +850,35 @@ function Strategies({
     }
   }
 
+  async function resetStrategy(strategy: StrategyInstance) {
+    if (!window.confirm(t.resetConfirm)) return;
+    const actionId = `reset:${strategy.id}`;
+    setPendingAction(actionId);
+    setStatusMessage("");
+    setRowStatus((current) => ({
+      ...current,
+      [strategy.id]: liveMode ? t.resetChecking : t.resetting
+    }));
+    try {
+      const response = await fetch(`/api/strategies/${strategy.id}/reset`, {
+        method: "POST"
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response, t.requestFailed));
+      }
+      const summary = (await response.json()) as StrategyResetSummary;
+      setStatusMessage(resetSummaryMessage(summary, t));
+      setRowStatus((current) => ({ ...current, [strategy.id]: t.paused }));
+      await onChanged();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t.requestFailed;
+      setStatusMessage(message);
+      setRowStatus((current) => ({ ...current, [strategy.id]: message }));
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
   function statusFor(strategy: StrategyInstance) {
     if (rowStatus[strategy.id]) return rowStatus[strategy.id];
     if (pendingAction === "global-pause" && strategy.enabled) return t.pausing;
@@ -888,6 +947,20 @@ function Strategies({
                 title={liveMode ? t.liveFlattenDisabled : t.flatten}
               >
                 {pendingAction === `flatten:${strategy.id}` ? t.flattening : t.flatten}
+              </button>
+              <button
+                className="smallButton"
+                disabled={pendingAction !== null || strategy.enabled}
+                onClick={() => void resetStrategy(strategy)}
+                title={t.resetConfirm}
+              >
+                {pendingAction === `reset:${strategy.id}`
+                  ? liveMode
+                    ? t.resetChecking
+                    : t.resetting
+                  : liveMode
+                    ? t.reconcileAndReset
+                    : t.reset}
               </button>
             </div>
           )
@@ -1403,6 +1476,17 @@ function pauseSummaryMessage(cancelledPending: number, t: typeof dictionary.en):
     `${t.cancelledVirtualEntries}: ${cancelledPending}`,
     t.brokerExposureNotClosed
   ].join(" · ");
+}
+
+function resetSummaryMessage(
+  summary: StrategyResetSummary,
+  t: typeof dictionary.en
+): string {
+  const allocationLabel =
+    summary.reconciled_allocations === 1
+      ? t.resetReconciledAllocation
+      : t.resetReconciledAllocations;
+  return `${t.resetComplete}; ${summary.reconciled_allocations} ${allocationLabel}. ${t.resetReadyToResume}.`;
 }
 
 function accountAliasLabel(account: AccountAlias): string {

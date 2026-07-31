@@ -129,6 +129,34 @@ def test_external_baseline_then_unexplained_mismatch_pauses_same_symbol(tmp_path
     )
 
 
+def test_account_reconciliation_keeps_paused_live_allocations_in_equation(
+    tmp_path,
+) -> None:
+    client = FakeCoordinatorClient(
+        positions=[{"symbol": "MGCQ6", "quantity": "1"}]
+    )
+    runtime = make_runtime(tmp_path, client)
+    strategy = live_strategy("st-paused")
+    strategy.enabled = False
+    runtime.repository.upsert_strategy_instance(strategy)
+    runtime.live_virtual_book.orders.append(
+        filled_order(strategy, "paused-allocation")
+    )
+    coordinator = LiveRuntimeCoordinator(runtime, client=client)
+
+    asyncio.run(coordinator.refresh_accounts())
+
+    reconciliation = runtime.repository.get_live_symbol_reconciliation(
+        "futures",
+        "MGCQ6",
+    )
+    assert reconciliation is not None
+    assert reconciliation["external_baseline_quantity"] == 0
+    assert reconciliation["observed_position"] == 1
+    assert reconciliation["expected_position"] == 1
+    assert reconciliation["status"] == "READY"
+
+
 def make_runtime(tmp_path, client) -> RuntimeService:
     runtime = RuntimeService(
         Settings(
@@ -228,8 +256,13 @@ def live_intent(
 
 
 class FakeCoordinatorClient:
-    def __init__(self, details: list[dict] | None = None) -> None:
+    def __init__(
+        self,
+        details: list[dict] | None = None,
+        positions: list[dict] | None = None,
+    ) -> None:
         self.details = list(details or [])
+        self.position_rows = list(positions or [])
 
     async def order_detail(self, account_id: str, client_order_id: str) -> dict:
         assert account_id == "acct-futures"
@@ -243,7 +276,7 @@ class FakeCoordinatorClient:
         return {"total_net_liquidation_value": "100000"}
 
     async def positions(self, account_id: str) -> list[dict]:
-        return []
+        return self.position_rows
 
     async def place_order(self, account_id: str, order: dict) -> dict:
         return {"client_order_id": order["client_order_id"]}

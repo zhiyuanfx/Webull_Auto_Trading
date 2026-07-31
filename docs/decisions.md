@@ -44,6 +44,22 @@ later eligible evaluation may create a fresh setup from current config. Pause do
 Webull Cancel Order or close `OPENING`, `FILLED`, `OPEN`, or `CLOSING` allocations, and a
 disabled strategy no longer runs its normal risk-management callbacks.
 
+Paused strategy instances support an additive per-EA reset operation. Test reset closes only
+the selected instance's active paper allocation using the current executable quote side.
+Live `Reconcile & Reset` performs fresh read-only Webull position, open-order, history, and
+Order Detail checks after the operator manually closes the broker position. It requires an
+unambiguous terminal opposite-side fill and requires the observed broker position to equal
+the preserved external baseline plus all active allocations owned by other strategies.
+Reset never mutates Webull, never changes global pause, never changes the external baseline,
+and never deletes history or creates a database backup.
+
+Slow Webull reads occur outside the shared strategy-operation lock. A fingerprint of target
+and same-account/same-symbol local state is rechecked after the lock is reacquired; any
+change requires the operator to retry. Live virtual rows, completed cycles, cleared runtime
+state, READY symbol reconciliation, and reset audit events commit in one SQLite transaction
+before the in-memory live book is replaced. Stateful strategies must explicitly implement
+per-instance `reset_state`; the default contract accepts only stateless strategies.
+
 Global and per-strategy flatten controls are paper-only: they pause execution, cancel
 virtual pending orders, and close paper positions only when an in-memory current quote
 provides the documented paper close side. Live mode rejects broad flatten; live exits are

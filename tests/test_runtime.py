@@ -1,11 +1,17 @@
+import asyncio
 import sys
 import threading
 import types
+from datetime import timedelta
+
+import pytest
 
 from webull_auto_trading.config import Settings
 from webull_auto_trading.domain import (
     LiveAccountState,
+    LiveIntentAction,
     LiveIntentStatus,
+    LiveOrderIntent,
     OrderRole,
     OrderSide,
     OrderStatus,
@@ -16,7 +22,7 @@ from webull_auto_trading.domain import (
     utc_now,
 )
 from webull_auto_trading.order_manager import PaperOrderBook
-from webull_auto_trading.runtime import RuntimeService
+from webull_auto_trading.runtime import RuntimeService, StrategyResetBlocked
 from webull_auto_trading.strategy.base import Strategy
 from webull_auto_trading.webull import WebullError
 
@@ -340,6 +346,328 @@ def test_pause_waits_for_running_evaluation_and_blocks_later_callbacks(tmp_path)
     assert strategy.calls == 1
 
 
+def test_test_reset_is_paused_isolated_persistent_and_idempotent(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    runtime.repository.seed_strategy_instances(
+        [
+            StrategyInstance(
+                id="st-1",
+                strategy_name="recycle_buy",
+                symbol="NASDAQ:AAPL",
+                enabled=False,
+            ),
+            StrategyInstance(
+                id="st-2",
+                strategy_name="recycle_buy",
+                symbol="NASDAQ:AAPL",
+                enabled=False,
+            ),
+        ]
+    )
+    target_open = virtual_order("target-open", "st-1", OrderStatus.OPEN)
+    target_pending = virtual_order("target-pending", "st-1", OrderStatus.PENDING)
+    other_open = virtual_order("other-open", "st-2", OrderStatus.OPEN)
+    runtime.order_book.orders = [target_open, target_pending, other_open]
+    runtime.quote_book.merge_quote_item(
+        {"code": "NASDAQ:AAPL", "bid": 110, "ask": 111}
+    )
+    strategy = runtime._strategy_for_instance(
+        next(
+            item
+            for item in runtime.repository.list_strategy_instances()
+            if item.id == "st-1"
+        )
+    )
+    assert strategy is not None
+    strategy.state_for(  # type: ignore[attr-defined]
+        next(
+            item
+            for item in runtime.repository.list_strategy_instances()
+            if item.id == "st-1"
+        )
+    ).active_cycle_id = target_open.cycle_id
+    runtime.repository.upsert_strategy_runtime_state(
+        "st-1",
+        {"active_cycle_id": target_open.cycle_id},
+    )
+    runtime.repository.sync_paper_state(
+        runtime.order_book.orders,
+        runtime.order_book.fills,
+        market_prices={"NASDAQ:AAPL": 110},
+    )
+
+    first = asyncio.run(runtime.reset_strategy("st-1"))
+    second = asyncio.run(runtime.reset_strategy("st-1"))
+
+    orders = {order.id: order for order in runtime.repository.list_paper_orders()}
+    assert first["reconciled_allocations"] == 1
+    assert first["cancelled_pending"] == 1
+    assert first["completed_cycles"] == 1
+    assert second["reconciled_allocations"] == 0
+    assert second["cancelled_pending"] == 0
+    assert second["completed_cycles"] == 0
+    assert orders["target-open"].status == OrderStatus.CLOSED
+    assert orders["target-open"].metadata["close_price"] == 110
+    assert orders["target-pending"].status == OrderStatus.CANCELLED
+    assert orders["other-open"].status == OrderStatus.OPEN
+    assert runtime.repository.get_strategy_runtime_state("st-1") == {}
+    assert strategy.state_for(  # type: ignore[attr-defined]
+        next(
+            item
+            for item in runtime.repository.list_strategy_instances()
+            if item.id == "st-1"
+        )
+    ).active_cycle_id is None
+    target_cycle = next(
+        item
+        for item in runtime.repository.list_cycles(RuntimeMode.TEST)
+        if item["id"] == target_open.cycle_id
+    )
+    assert target_cycle["status"] == "COMPLETED"
+    assert all(
+        not item.enabled
+        for item in runtime.repository.list_strategy_instances()
+        if item.id == "st-1"
+    )
+
+
+def test_test_reset_rejects_enabled_or_missing_quote_without_mutation(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    instance = StrategyInstance(
+        id="st-reset",
+        strategy_name="recycle_buy",
+        symbol="NASDAQ:AAPL",
+    )
+    runtime.repository.upsert_strategy_instance(instance)
+    order = virtual_order("target-open", instance.id, OrderStatus.OPEN)
+    runtime.order_book.orders = [order]
+    runtime.repository.sync_paper_state([order], [], market_prices={})
+
+    with pytest.raises(StrategyResetBlocked, match="pause"):
+        asyncio.run(runtime.reset_strategy(instance.id))
+    runtime.repository.update_strategy_instance(instance.id, {"enabled": False})
+    with pytest.raises(StrategyResetBlocked, match="no current paper close quote"):
+        asyncio.run(runtime.reset_strategy(instance.id))
+
+    assert runtime.order_book.orders[0].status == OrderStatus.OPEN
+    assert runtime.repository.list_paper_orders()[0].status == OrderStatus.OPEN
+
+
+def test_live_reconcile_reset_matches_manual_fill_and_preserves_other_strategy(
+    tmp_path,
+) -> None:
+    filled_at = utc_now()
+    client = ResetReadClient(
+        positions=[{"symbol": "AAPL", "quantity": "2"}],
+        history=[
+            {
+                "client_order_id": "manual-close-1",
+                "order_id": "wb-manual-1",
+                "symbol": "AAPL",
+                "side": "SELL",
+                "status": "FILLED",
+                "filled_quantity": "0.4",
+                "filled_price": "109",
+                "filled_time_at": filled_at.isoformat(),
+            },
+            {
+                "client_order_id": "manual-close-2",
+                "order_id": "wb-manual-2",
+                "symbol": "AAPL",
+                "side": "SELL",
+                "status": "FILLED",
+                "filled_quantity": "0.6",
+                "filled_price": "111",
+                "filled_time_at": filled_at.isoformat(),
+            }
+        ],
+    )
+    runtime = make_live_runtime(tmp_path, client)
+    target = live_strategy()
+    target.enabled = False
+    other = StrategyInstance(
+        id="st-other",
+        strategy_name="recycle_buy",
+        symbol="NASDAQ:AAPL",
+        webull_symbol="AAPL",
+        account_alias="stock_margin",
+        asset_class="stock",
+        enabled=True,
+        live_execution_enabled=True,
+    )
+    runtime.repository.seed_strategy_instances([target, other])
+    target_order = virtual_order("target-open", target.id, OrderStatus.OPEN)
+    target_order.opened_at = filled_at - timedelta(minutes=5)
+    target_order.metadata["broker_fill_confirmed"] = True
+    other_order = virtual_order("other-open", other.id, OrderStatus.OPEN)
+    other_order.quantity = 2
+    other_order.opened_at = filled_at - timedelta(minutes=10)
+    other_order.metadata["broker_fill_confirmed"] = True
+    runtime.live_virtual_book.orders = [target_order, other_order]
+    runtime.repository.sync_live_virtual_state(runtime.live_virtual_book.orders)
+    opening_intent = LiveOrderIntent(
+        id="loi-opening",
+        strategy_instance_id=target.id,
+        cycle_id=target_order.cycle_id,
+        action=LiveIntentAction.OPEN_MARKET,
+        side=OrderSide.BUY,
+        quantity=1,
+        market_data_symbol=target.symbol,
+        webull_symbol=target.webull_symbol,
+        account_alias=target.account_alias,
+        account_id="acct-1",
+        client_order_id="wat-opening",
+        status=LiveIntentStatus.FILLED,
+    )
+    runtime.repository.upsert_live_order_intent(opening_intent)
+    runtime.repository.upsert_live_symbol_reconciliation(
+        account_alias="stock_margin",
+        webull_symbol="AAPL",
+        external_baseline_quantity=0,
+        observed_position=3,
+        expected_position=3,
+        status="READY",
+    )
+
+    result = asyncio.run(runtime.reset_strategy(target.id))
+    second = asyncio.run(runtime.reset_strategy(target.id))
+
+    orders = {
+        order.id: order
+        for order in runtime.repository.list_live_virtual_orders()
+    }
+    cycle = next(
+        item
+        for item in runtime.repository.list_cycles(RuntimeMode.LIVE)
+        if item["id"] == target_order.cycle_id
+    )
+    reconciliation = runtime.repository.get_live_symbol_reconciliation(
+        "stock_margin",
+        "AAPL",
+    )
+    assert result["broker_position_observed"] == 2
+    assert result["expected_broker_position"] == 2
+    assert result["reconciled_allocations"] == 1
+    assert result["completed_cycles"] == 1
+    assert second["reconciled_allocations"] == 0
+    assert orders["target-open"].status == OrderStatus.CLOSED
+    assert orders["target-open"].metadata["close_reason"] == "manual_broker_close"
+    assert orders["target-open"].metadata["manual_broker_order_ids"] == [
+        "wb-manual-1",
+        "wb-manual-2",
+    ]
+    assert orders["target-open"].metadata[
+        "manual_close_fill_price"
+    ] == pytest.approx(110.2)
+    assert orders["other-open"].status == OrderStatus.OPEN
+    assert cycle["status"] == "COMPLETED"
+    assert cycle["realized_pnl"] == pytest.approx(10.2)
+    assert reconciliation is not None
+    assert reconciliation["external_baseline_quantity"] == 0
+    assert reconciliation["status"] == "READY"
+    assert client.calls.count("positions") == 2
+    assert "place_order" not in client.calls
+
+
+def test_live_reset_rejects_working_order_without_local_mutation(tmp_path) -> None:
+    filled_at = utc_now()
+    client = ResetReadClient(
+        positions=[],
+        open_orders=[
+            {
+                "client_order_id": "manual-working",
+                "symbol": "AAPL",
+                "status": "SUBMITTED",
+            }
+        ],
+        history=[],
+    )
+    runtime = make_live_runtime(tmp_path, client)
+    strategy = live_strategy()
+    strategy.enabled = False
+    runtime.repository.upsert_strategy_instance(strategy)
+    runtime.repository.upsert_live_symbol_reconciliation(
+        account_alias="stock_margin",
+        webull_symbol="AAPL",
+        external_baseline_quantity=0,
+        observed_position=0,
+        expected_position=0,
+        status="READY",
+    )
+    order = virtual_order("target-open", strategy.id, OrderStatus.OPEN)
+    order.opened_at = filled_at - timedelta(minutes=5)
+    order.metadata["broker_fill_confirmed"] = True
+    runtime.live_virtual_book.orders = [order]
+    runtime.repository.sync_live_virtual_state([order])
+
+    with pytest.raises(StrategyResetBlocked, match="broker order is still working"):
+        asyncio.run(runtime.reset_strategy(strategy.id))
+
+    assert runtime.live_virtual_book.orders[0].status == OrderStatus.OPEN
+    assert runtime.repository.list_live_virtual_orders()[0].status == OrderStatus.OPEN
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        LiveIntentStatus.PENDING_SUBMIT,
+        LiveIntentStatus.SUBMITTED,
+        LiveIntentStatus.ACCEPTED,
+        LiveIntentStatus.PARTIAL_FILLED,
+        LiveIntentStatus.UNKNOWN,
+        LiveIntentStatus.DESYNCED,
+    ],
+)
+def test_live_reset_rejects_every_unresolved_intent_before_webull_reads(
+    tmp_path,
+    status,
+) -> None:
+    client = FailOnResetReadClient()
+    runtime = make_live_runtime(tmp_path, client)
+    strategy = live_strategy()
+    strategy.enabled = False
+    runtime.repository.upsert_strategy_instance(strategy)
+    runtime.repository.upsert_live_order_intent(
+        LiveOrderIntent(
+            id=f"intent-{status.value}",
+            strategy_instance_id=strategy.id,
+            cycle_id="cycle-1",
+            action=LiveIntentAction.OPEN_MARKET,
+            side=OrderSide.BUY,
+            quantity=1,
+            market_data_symbol=strategy.symbol,
+            webull_symbol=strategy.webull_symbol,
+            account_alias=strategy.account_alias,
+            account_id="acct-1",
+            client_order_id=f"client-{status.value}",
+            status=status,
+        )
+    )
+
+    with pytest.raises(StrategyResetBlocked, match=status.value.lower()):
+        asyncio.run(runtime.reset_strategy(strategy.id))
+
+    assert client.calls == []
+
+
+def test_stateful_strategy_without_reset_contract_is_rejected(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    runtime.strategies["unsafe_stateful"] = UnsafeStatefulStrategy()
+    runtime.repository.upsert_strategy_instance(
+        StrategyInstance(
+            id="st-unsafe",
+            strategy_name="unsafe_stateful",
+            symbol="NASDAQ:AAPL",
+            enabled=False,
+        )
+    )
+
+    with pytest.raises(StrategyResetBlocked, match="does not implement reset_state"):
+        asyncio.run(runtime.reset_strategy("st-unsafe"))
+
+    assert runtime.repository.count_activity_events("StrategyStateReset") == 0
+
+
 def test_enabled_symbol_streams_are_deduplicated(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.repository.seed_strategy_instances(
@@ -569,6 +897,79 @@ class FailOnCallLiveOrderClient:
     async def place_order(self, account_id: str, order: dict[str, str]) -> dict[str, str]:
         self.calls.append("place_order")
         raise AssertionError("pause must not submit a Webull order")
+
+
+class ResetReadClient:
+    def __init__(
+        self,
+        *,
+        positions: list[dict],
+        history: list[dict],
+        open_orders: list[dict] | None = None,
+    ) -> None:
+        self.position_rows = positions
+        self.history_rows = history
+        self.open_order_rows = list(open_orders or [])
+        self.calls: list[str] = []
+
+    async def positions(self, account_id: str) -> list[dict]:
+        assert account_id == "acct-1"
+        self.calls.append("positions")
+        return self.position_rows
+
+    async def open_orders(self, account_id: str) -> list[dict]:
+        assert account_id == "acct-1"
+        self.calls.append("open_orders")
+        return self.open_order_rows
+
+    async def order_history(self, account_id: str) -> list[dict]:
+        assert account_id == "acct-1"
+        self.calls.append("order_history")
+        return self.history_rows
+
+    async def order_detail(
+        self,
+        account_id: str,
+        client_order_id: str,
+    ) -> dict:
+        assert account_id == "acct-1"
+        self.calls.append("order_detail")
+        return {
+            "orders": [
+                row
+                for row in self.history_rows
+                if row.get("client_order_id") == client_order_id
+            ]
+        }
+
+    async def place_order(self, account_id: str, order: dict) -> dict:
+        self.calls.append("place_order")
+        raise AssertionError("reset must not place an order")
+
+
+class FailOnResetReadClient:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def __getattr__(self, name: str):
+        async def fail(*_args, **_kwargs):
+            self.calls.append(name)
+            raise AssertionError("unsafe reset must fail before Webull reads")
+
+        return fail
+
+
+class UnsafeStatefulStrategy(Strategy):
+    def export_state(self, instance: StrategyInstance) -> dict:
+        return {"strategy_instance_id": instance.id, "active": True}
+
+    def on_quote(
+        self,
+        instance: StrategyInstance,
+        quote,
+        order_book: PaperOrderBook,
+    ) -> list[str]:
+        return []
 
 
 class FreshOcoStrategy(Strategy):

@@ -109,11 +109,32 @@ class LiveRuntimeCoordinator:
                 intent.client_order_id,
             )
         except WebullError as exc:
-            self._pause_intent(intent, LiveIntentStatus.UNKNOWN, exc.message)
-            return intent
+            with self.runtime._strategy_operation_lock:
+                current = self._current_intent(intent.id)
+                if current is not None and current.status == intent.status:
+                    self._pause_intent(current, LiveIntentStatus.UNKNOWN, exc.message)
+                return current or intent
         except Exception as exc:
-            self._pause_intent(intent, LiveIntentStatus.UNKNOWN, _safe_error(exc))
-            return intent
+            with self.runtime._strategy_operation_lock:
+                current = self._current_intent(intent.id)
+                if current is not None and current.status == intent.status:
+                    self._pause_intent(
+                        current,
+                        LiveIntentStatus.UNKNOWN,
+                        _safe_error(exc),
+                    )
+                return current or intent
+        with self.runtime._strategy_operation_lock:
+            current = self._current_intent(intent.id)
+            if current is None or current.status != intent.status:
+                return current or intent
+            return self._apply_order_detail(current, response)
+
+    def _apply_order_detail(
+        self,
+        intent: LiveOrderIntent,
+        response: dict[str, Any],
+    ) -> LiveOrderIntent:
         detail = _extract_order_detail(response)
         broker_status = str(detail.get("status") or "").upper()
         mapped = {
@@ -158,11 +179,21 @@ class LiveRuntimeCoordinator:
         )
         return intent
 
+    def _current_intent(self, intent_id: str) -> LiveOrderIntent | None:
+        return next(
+            (
+                item
+                for item in self.runtime.repository.list_live_order_intents()
+                if item.id == intent_id
+            ),
+            None,
+        )
+
     async def refresh_accounts(self) -> None:
         instances = [
             item
             for item in self.runtime.repository.list_strategy_instances()
-            if item.enabled and item.live_execution_enabled and item.account_alias
+            if item.account_alias and item.webull_symbol
         ]
         by_alias: dict[str, list[StrategyInstance]] = {}
         for instance in instances:
@@ -172,7 +203,11 @@ class LiveRuntimeCoordinator:
             if not account_id:
                 continue
             for instance in alias_instances:
-                if instance.id not in self._preview_ready:
+                if (
+                    instance.enabled
+                    and instance.live_execution_enabled
+                    and instance.id not in self._preview_ready
+                ):
                     self._preview_ready[instance.id] = await self._preview_both_sides(
                         account_id,
                         instance,
@@ -200,27 +235,44 @@ class LiveRuntimeCoordinator:
             observed_at = utc_now()
             position_rows = _as_rows(positions)
             equity = _find_float(balance, "total_net_liquidation_value")
-            for symbol in sorted({item.webull_symbol for item in alias_instances}):
-                self._reconcile_symbol(alias, symbol, position_rows, alias_instances)
-            for instance in alias_instances:
-                reconciliation = self.runtime.repository.get_live_symbol_reconciliation(
-                    alias,
-                    instance.webull_symbol,
-                )
-                ready = bool(reconciliation and reconciliation["status"] == "READY")
-                error = str(reconciliation["error_message"]) if reconciliation else "pending"
-                self.runtime.ingest_live_account_state(
-                    LiveAccountState(
-                        account_alias=alias,
-                        total_net_liquidation_value=equity,
-                        observed_at=observed_at,
-                        strategy_instance_id=instance.id,
-                        positions=position_rows,
-                        previews_ready=self._preview_ready.get(instance.id, False),
-                        reconciliation_ready=ready,
-                        reconciliation_error="" if ready else error,
+            with self.runtime._strategy_operation_lock:
+                for symbol in sorted({item.webull_symbol for item in alias_instances}):
+                    self._reconcile_symbol(
+                        alias,
+                        symbol,
+                        position_rows,
+                        alias_instances,
                     )
-                )
+                for instance in alias_instances:
+                    reconciliation = (
+                        self.runtime.repository.get_live_symbol_reconciliation(
+                            alias,
+                            instance.webull_symbol,
+                        )
+                    )
+                    ready = bool(
+                        reconciliation and reconciliation["status"] == "READY"
+                    )
+                    error = (
+                        str(reconciliation["error_message"])
+                        if reconciliation
+                        else "pending"
+                    )
+                    self.runtime.ingest_live_account_state(
+                        LiveAccountState(
+                            account_alias=alias,
+                            total_net_liquidation_value=equity,
+                            observed_at=observed_at,
+                            strategy_instance_id=instance.id,
+                            positions=position_rows,
+                            previews_ready=self._preview_ready.get(
+                                instance.id,
+                                False,
+                            ),
+                            reconciliation_ready=ready,
+                            reconciliation_error="" if ready else error,
+                        )
+                    )
 
     async def _preview_both_sides(
         self,

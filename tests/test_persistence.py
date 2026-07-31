@@ -260,3 +260,74 @@ def test_live_order_intents_persist_and_block_unresolved(tmp_path) -> None:
     restarted.upsert_live_order_intent(intent)
 
     assert restarted.has_unresolved_live_intent("st-1") is False
+
+
+def test_live_strategy_reset_commit_preserves_history_and_baseline(tmp_path) -> None:
+    repo = RuntimeRepository(tmp_path / "runtime.sqlite3")
+    repo.init_db()
+    order = PaperOrderBook().place_market_order(
+        strategy_instance_id="st-live",
+        cycle_id="cyc-live",
+        symbol="NASDAQ:AAPL",
+        side=OrderSide.BUY,
+        role=OrderRole.MAIN,
+        quantity=1,
+        fill_price=100,
+        stop_loss=95,
+        take_profit=105,
+    )
+    order.status = OrderStatus.CLOSED
+    order.closed_at = order.opened_at
+    order.metadata.update(
+        {
+            "close_price": 110,
+            "manual_reconciliation": True,
+            "broker_close_fill_confirmed": True,
+        }
+    )
+    intent = LiveOrderIntent(
+        id="intent-history",
+        strategy_instance_id="st-live",
+        cycle_id="cyc-live",
+        action=LiveIntentAction.OPEN_MARKET,
+        side=OrderSide.BUY,
+        quantity=1,
+        market_data_symbol="NASDAQ:AAPL",
+        webull_symbol="AAPL",
+        account_alias="stock_margin",
+        account_id="acct-secret",
+        client_order_id="wat-history",
+        status=LiveIntentStatus.FILLED,
+    )
+    repo.upsert_live_order_intent(intent)
+    repo.upsert_strategy_runtime_state("st-live", {"active_cycle_id": "cyc-live"})
+
+    repo.commit_live_strategy_reset(
+        orders=[order],
+        strategy_instance_id="st-live",
+        symbol="NASDAQ:AAPL",
+        account_alias="stock_margin",
+        webull_symbol="AAPL",
+        external_baseline_quantity=5,
+        observed_position=5,
+        expected_position=5,
+        activity_payload={"reset_count": 1},
+        manual_close_payload={"quantity": 1, "fill_price": 110},
+    )
+
+    assert repo.list_live_virtual_orders()[0].status == OrderStatus.CLOSED
+    assert repo.list_cycles(RuntimeMode.LIVE)[0]["status"] == "COMPLETED"
+    assert repo.list_cycles(RuntimeMode.LIVE)[0]["realized_pnl"] == 10
+    assert repo.list_live_order_intents()[0].id == "intent-history"
+    assert repo.get_strategy_runtime_state("st-live") == {}
+    reconciliation = repo.get_live_symbol_reconciliation(
+        "stock_margin",
+        "AAPL",
+    )
+    assert reconciliation is not None
+    assert reconciliation["external_baseline_quantity"] == 5
+    assert reconciliation["status"] == "READY"
+    assert repo.count_activity_events(
+        "ManualBrokerCloseReconciled",
+        strategy_instance_id="st-live",
+    ) == 1

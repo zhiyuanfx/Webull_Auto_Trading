@@ -18,7 +18,7 @@ from webull_auto_trading.domain import (
 )
 from webull_auto_trading.execution import AccountSnapshot, LiveOrdersSnapshot
 from webull_auto_trading.order_manager import PaperOrderBook
-from webull_auto_trading.runtime import RuntimeService
+from webull_auto_trading.runtime import RuntimeService, StrategyResetBrokerError
 
 
 def test_market_stream_status_endpoint_returns_safe_status(monkeypatch) -> None:
@@ -321,6 +321,72 @@ def test_pause_api_returns_cancellation_count_and_logs_activity(
     assert order.id in {item.id for item in runtime.repository.list_paper_orders()}
     assert stream_service.started is True
     assert live_coordinator.started is True
+
+
+def test_strategy_reset_api_contract_and_status_codes(tmp_path, monkeypatch) -> None:
+    settings = Settings(
+        runtime_db_path=tmp_path / "runtime.sqlite3",
+        strategies_test_config_path=tmp_path / "strategies.test.yml",
+        strategies_live_config_path=tmp_path / "strategies.live.yml",
+        _env_file=None,
+    )
+    runtime = RuntimeService(settings)
+    runtime.initialize(seed_config=False)
+    runtime.repository.seed_strategy_instances(
+        [
+            StrategyInstance(
+                id="st-paused",
+                strategy_name="recycle_buy",
+                symbol="NASDAQ:AAPL",
+                enabled=False,
+            ),
+            StrategyInstance(
+                id="st-enabled",
+                strategy_name="recycle_buy",
+                symbol="NASDAQ:MSFT",
+                enabled=True,
+            ),
+        ]
+    )
+    stream_service = FakeStreamService({})
+    live_coordinator = FakeStreamService({})
+    monkeypatch.setattr(api, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(api, "get_stream_service", lambda: stream_service)
+    monkeypatch.setattr(api, "get_live_coordinator", lambda: live_coordinator)
+
+    with TestClient(api.create_app()) as client:
+        success = client.post("/api/strategies/st-paused/reset")
+        conflict = client.post("/api/strategies/st-enabled/reset")
+        missing = client.post("/api/strategies/missing/reset")
+
+        async def fail_broker_read(_strategy_id: str):
+            raise StrategyResetBrokerError("Webull reconciliation reads failed")
+
+        monkeypatch.setattr(runtime, "reset_strategy", fail_broker_read)
+        gateway_failure = client.post("/api/strategies/st-paused/reset")
+
+    assert success.status_code == 200
+    assert success.json() == {
+        "strategy_id": "st-paused",
+        "mode": "test",
+        "enabled": False,
+        "reset": True,
+        "completed": True,
+        "cancelled_pending": 0,
+        "reconciled_allocations": 0,
+        "completed_cycles": 0,
+        "strategy_state_cleared": True,
+        "broker_position_observed": None,
+        "expected_broker_position": None,
+        "reset_count": 1,
+        "warnings": [],
+        "blocking_reason": None,
+    }
+    assert conflict.status_code == 409
+    assert "pause the strategy" in conflict.json()["detail"]
+    assert missing.status_code == 404
+    assert gateway_failure.status_code == 502
+    assert "Webull reconciliation reads failed" in gateway_failure.json()["detail"]
 
 
 class FakeReadService:

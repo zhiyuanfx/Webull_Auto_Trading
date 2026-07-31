@@ -23,7 +23,8 @@
   construction, unique execution-leg IDs, and safety-gated submission adapter.
 - `src/webull_auto_trading/live_reconciliation.py`: periodic safety evaluation, read-only
   previews, Order Detail fill reconciliation, balance/position refresh, tagged allocation
-  reconciliation, and mismatch pauses.
+  reconciliation, mismatch pauses, and fresh read-only manual-close attribution for
+  per-strategy reset.
 - `src/webull_auto_trading/market_data.py`: InsightSentry quote merge, subscription, and
   rejection rules.
 - `src/webull_auto_trading/insightsentry_stream.py`: production InsightSentry quote/series
@@ -56,6 +57,10 @@ and user request.
 - Pausing one strategy cancels and persists only that instance's local `PENDING` virtual
   entries. It never calls Webull Cancel Order, alters another strategy, or closes
   `OPENING`, `FILLED`, `OPEN`, or `CLOSING` allocations.
+- Reconcile & Reset is per-strategy and paused-only. In Live mode it uses fresh positions,
+  open orders, history, and Order Detail to prove a manual broker close, preserves the
+  external baseline, and never sends a Webull mutation. Stateful strategies must implement
+  an explicit per-instance reset hook.
 - Strategy instances do not expose public per-strategy execution modes.
 - Market quote/series display is process-memory only; do not persist new quote or bar data.
 - There is no external-alert intake, local simulator, or alternate trading environment.

@@ -639,37 +639,7 @@ class RuntimeRepository:
     def sync_live_virtual_state(self, orders: Iterable[PaperOrder]) -> None:
         order_list = list(orders)
         with self.connect() as conn:
-            conn.execute("DELETE FROM live_virtual_orders")
-            for order in order_list:
-                conn.execute(
-                    """
-                    INSERT INTO live_virtual_orders(
-                        id, strategy_instance_id, cycle_id, symbol, side, role, status, quantity,
-                        stop_price, fill_price, stop_loss, take_profit, parent_order_id,
-                        opened_at, closed_at, metadata_json, updated_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        order.id,
-                        order.strategy_instance_id,
-                        order.cycle_id,
-                        order.symbol,
-                        order.side.value,
-                        order.role.value if isinstance(order.role, OrderRole) else str(order.role),
-                        order.status.value,
-                        order.quantity,
-                        order.stop_price,
-                        order.fill_price,
-                        order.stop_loss,
-                        order.take_profit,
-                        order.parent_order_id,
-                        iso(order.opened_at) if order.opened_at else None,
-                        iso(order.closed_at) if order.closed_at else None,
-                        encode_json(order.metadata),
-                        iso(),
-                    ),
-                )
+            self._replace_live_virtual_orders(conn, order_list)
             self._sync_cycles(conn, order_list, RuntimeMode.LIVE)
 
     def get_strategy_runtime_state(self, strategy_instance_id: str) -> dict[str, Any]:
@@ -701,6 +671,135 @@ class RuntimeRepository:
                 """,
                 (strategy_instance_id, encode_json(state), iso()),
             )
+
+    def delete_strategy_runtime_state(self, strategy_instance_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM strategy_runtime_state
+                WHERE strategy_instance_id = ?
+                """,
+                (strategy_instance_id,),
+            )
+
+    def commit_live_strategy_reset(
+        self,
+        *,
+        orders: Iterable[PaperOrder],
+        strategy_instance_id: str,
+        symbol: str,
+        account_alias: str,
+        webull_symbol: str,
+        external_baseline_quantity: float,
+        observed_position: float,
+        expected_position: float,
+        activity_payload: dict[str, Any],
+        manual_close_payload: dict[str, Any] | None,
+    ) -> None:
+        """Persist one complete live reset as a single SQLite transaction."""
+        order_list = list(orders)
+        now = iso()
+        with self.connect() as conn:
+            self._replace_live_virtual_orders(conn, order_list)
+            self._sync_cycles(conn, order_list, RuntimeMode.LIVE)
+            conn.execute(
+                """
+                DELETE FROM strategy_runtime_state
+                WHERE strategy_instance_id = ?
+                """,
+                (strategy_instance_id,),
+            )
+            conn.execute(
+                """
+                INSERT INTO live_symbol_reconciliation(
+                    account_alias, webull_symbol, external_baseline_quantity,
+                    observed_position, expected_position, status, error_message, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'READY', '', ?)
+                ON CONFLICT(account_alias, webull_symbol) DO UPDATE SET
+                    external_baseline_quantity=excluded.external_baseline_quantity,
+                    observed_position=excluded.observed_position,
+                    expected_position=excluded.expected_position,
+                    status=excluded.status,
+                    error_message=excluded.error_message,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    account_alias,
+                    webull_symbol,
+                    external_baseline_quantity,
+                    observed_position,
+                    expected_position,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO activity(
+                    ts, level, strategy_instance_id, symbol, event_type, message, payload_json
+                )
+                VALUES (?, 'info', ?, ?, 'StrategyStateReset', ?, ?)
+                """,
+                (
+                    now,
+                    strategy_instance_id,
+                    symbol,
+                    f"Strategy {strategy_instance_id} local state reset",
+                    encode_json(activity_payload),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO live_reconciliation_events(
+                    id, strategy_instance_id, intent_id, status, message,
+                    payload_json, created_at
+                )
+                VALUES (?, ?, NULL, 'RESET', 'Strategy state reset after fresh broker checks', ?, ?)
+                """,
+                (
+                    new_id("lre"),
+                    strategy_instance_id,
+                    encode_json(activity_payload),
+                    now,
+                ),
+            )
+            if manual_close_payload is not None:
+                conn.execute(
+                    """
+                    INSERT INTO activity(
+                        ts, level, strategy_instance_id, symbol, event_type,
+                        message, payload_json
+                    )
+                    VALUES (
+                        ?, 'info', ?, ?, 'ManualBrokerCloseReconciled',
+                        'Manual Webull close reconciled to local allocation', ?
+                    )
+                    """,
+                    (
+                        now,
+                        strategy_instance_id,
+                        symbol,
+                        encode_json(manual_close_payload),
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO live_reconciliation_events(
+                        id, strategy_instance_id, intent_id, status, message,
+                        payload_json, created_at
+                    )
+                    VALUES (
+                        ?, ?, NULL, 'MANUAL_CLOSE',
+                        'Manual Webull close reconciled to local allocation', ?, ?
+                    )
+                    """,
+                    (
+                        new_id("lre"),
+                        strategy_instance_id,
+                        encode_json(manual_close_payload),
+                        now,
+                    ),
+                )
 
     def upsert_live_order_intent(self, intent: LiveOrderIntent) -> LiveOrderIntent:
         intent.updated_at = utc_now()
@@ -1198,6 +1297,25 @@ class RuntimeRepository:
                 ),
             )
 
+    def count_activity_events(
+        self,
+        event_type: str,
+        *,
+        strategy_instance_id: str | None = None,
+    ) -> int:
+        if strategy_instance_id is None:
+            where = "event_type = ?"
+            params: tuple[Any, ...] = (event_type,)
+        else:
+            where = "event_type = ? AND strategy_instance_id = ?"
+            params = (event_type, strategy_instance_id)
+        with self.connect() as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM activity WHERE {where}",
+                params,
+            ).fetchone()
+        return int(row["count"]) if row else 0
+
     def seed_strategy_instances(self, instances: Iterable[StrategyInstance]) -> None:
         for instance in instances:
             self.upsert_strategy_instance(instance)
@@ -1214,6 +1332,43 @@ class RuntimeRepository:
         with self.connect() as conn:
             conn.execute("DELETE FROM strategy_instances")
         self.seed_strategy_instances(prepared)
+
+    def _replace_live_virtual_orders(
+        self,
+        conn: sqlite3.Connection,
+        orders: list[PaperOrder],
+    ) -> None:
+        conn.execute("DELETE FROM live_virtual_orders")
+        for order in orders:
+            conn.execute(
+                """
+                INSERT INTO live_virtual_orders(
+                    id, strategy_instance_id, cycle_id, symbol, side, role, status, quantity,
+                    stop_price, fill_price, stop_loss, take_profit, parent_order_id,
+                    opened_at, closed_at, metadata_json, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order.id,
+                    order.strategy_instance_id,
+                    order.cycle_id,
+                    order.symbol,
+                    order.side.value,
+                    order.role.value if isinstance(order.role, OrderRole) else str(order.role),
+                    order.status.value,
+                    order.quantity,
+                    order.stop_price,
+                    order.fill_price,
+                    order.stop_loss,
+                    order.take_profit,
+                    order.parent_order_id,
+                    iso(order.opened_at) if order.opened_at else None,
+                    iso(order.closed_at) if order.closed_at else None,
+                    encode_json(order.metadata),
+                    iso(),
+                ),
+            )
 
     def _sync_cycles(
         self,

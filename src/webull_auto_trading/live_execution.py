@@ -49,6 +49,12 @@ class LiveOrderClient(Protocol):
     async def positions(self, account_id: str) -> list[dict[str, Any]]:
         ...
 
+    async def open_orders(self, account_id: str) -> list[dict[str, Any]]:
+        ...
+
+    async def order_history(self, account_id: str) -> list[dict[str, Any]]:
+        ...
+
 
 @dataclass(slots=True)
 class LiveMarketOrderRequest:

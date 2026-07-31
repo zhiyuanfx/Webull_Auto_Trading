@@ -8,6 +8,10 @@ from webull_auto_trading.domain import Bar, LiveAccountState, QuoteState, Strate
 from webull_auto_trading.order_manager import PaperOrderBook
 
 
+class StrategyStateResetUnsupported(RuntimeError):
+    """Raised when a stateful strategy has not implemented safe per-instance reset."""
+
+
 class Strategy(ABC):
     def subscription_requirements(
         self,
@@ -51,6 +55,14 @@ class Strategy(ABC):
     def import_state(self, instance: StrategyInstance, state: dict[str, Any]) -> None:
         """Restore durable control state. The default keeps existing strategies stateless."""
         return None
+
+    def reset_state(self, instance: StrategyInstance) -> None:
+        """Reset one instance, rejecting stateful strategies without an explicit contract."""
+        if self.export_state(instance):
+            raise StrategyStateResetUnsupported(
+                f"Strategy {instance.strategy_name} has durable state but does not "
+                "implement reset_state(instance)"
+            )
 
     @abstractmethod
     def on_quote(
